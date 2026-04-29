@@ -123,7 +123,7 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
           <table className="w-full text-[11px]">
             <thead>
               <tr className="dark:bg-dark-surface bg-gray-50 dark:border-dark-border border-b border-light-border">
-                {cols.map(c => (
+                {ALL_COLS.map(c => (
                   <th key={c} className="px-3 py-2 text-left font-bold dark:text-dark-muted text-light-muted uppercase tracking-wider whitespace-nowrap">
                     {LABEL[c] ?? c}
                   </th>
@@ -135,7 +135,7 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
                 <tr key={i}
                   className="row-enter dark:border-dark-border border-b border-light-border last:border-0 dark:hover:bg-dark-border/30 hover:bg-gray-50 transition-colors"
                   style={{ animationDelay: `${120 + Math.min(i * 10, 200)}ms` }}>
-                  {cols.map(c => {
+                  {ALL_COLS.map(c => {
                     const val = String(r[c] ?? "");
                     const isEstado = c === "ESTADO";
                     const color = isEstado
