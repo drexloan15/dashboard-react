@@ -1,11 +1,17 @@
 "use client";
+import { useState } from "react";
 import Card from "@/components/ui/Card";
 import StatPill from "@/components/ui/StatPill";
 import { SUMINISTROS } from "@/types";
 import type { Printer } from "@/types";
 import { toNum } from "@/lib/utils";
 
+type SendState = "idle" | "loading" | "ok" | "error";
+
 export default function Alertas({ printers }: { printers: Printer[] }) {
+  const [sendState, setSendState] = useState<SendState>("idle");
+  const [sendMsg,   setSendMsg]   = useState("");
+
   type Alert = { ip: string; sede: string; area: string; modelo: string; suministro: string; nivel: "CRÍTICO" | "BAJO"; color: string; valor: number };
   const alertas: Alert[] = [];
 
@@ -29,6 +35,26 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
   const cn = alertas.filter(a => a.nivel === "CRÍTICO").length;
   const bn = alertas.filter(a => a.nivel === "BAJO").length;
 
+  async function sendAlert() {
+    setSendState("loading");
+    setSendMsg("");
+    try {
+      const res = await fetch("/api/py/send-alert", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Error desconocido");
+      if (data.sent) {
+        setSendState("ok");
+        setSendMsg(`Notificación enviada · ${data.alertas} alertas → ${data.destinatario}`);
+      } else {
+        setSendState("ok");
+        setSendMsg(data.message);
+      }
+    } catch (e: unknown) {
+      setSendState("error");
+      setSendMsg(e instanceof Error ? e.message : "Error al enviar");
+    }
+  }
+
   if (!alertas.length) {
     return (
       <div>
@@ -44,10 +70,31 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
 
   return (
     <div>
-      <h1 className="page-title text-2xl font-bold mb-1 dark:text-dark-text text-light-text">Alertas</h1>
-      <p className="page-title text-[13px] dark:text-dark-muted text-light-muted mb-6" style={{ animationDelay: "60ms" }}>
+      <div className="flex items-start justify-between gap-4 mb-1 flex-wrap">
+        <h1 className="page-title text-2xl font-bold dark:text-dark-text text-light-text">Alertas</h1>
+        <button
+          onClick={sendAlert}
+          disabled={sendState === "loading"}
+          className="page-title flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-semibold
+            bg-brand-blue text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed
+            transition-all cursor-pointer shrink-0"
+          style={{ animationDelay: "60ms" }}
+        >
+          {sendState === "loading" ? "Enviando..." : "✉ Notificar por correo"}
+        </button>
+      </div>
+      <p className="page-title text-[13px] dark:text-dark-muted text-light-muted mb-2" style={{ animationDelay: "60ms" }}>
         {alertas.length} alertas activas
       </p>
+      {sendMsg && (
+        <p className={`text-[12px] mb-4 px-3 py-2 rounded-lg ${
+          sendState === "error"
+            ? "text-brand-red bg-brand-red/10"
+            : "text-brand-green bg-brand-green/10"
+        }`}>
+          {sendState === "error" ? "✕ " : "✓ "}{sendMsg}
+        </p>
+      )}
 
       <div className="flex gap-2.5 mb-5">
         <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "80ms" }}>

@@ -3,10 +3,10 @@ import { useTheme } from "@/context/ThemeContext";
 import type { Page } from "@/types";
 
 const NAV: { id: Page; icon: string; label: string }[] = [
-  { id: "overview",  icon: "⊡", label: "Panel de Control" },
-  { id: "mapa",      icon: "⊕", label: "Mapa" },
-  { id: "sedes",     icon: "⊞", label: "Por Sede" },
-  { id: "alertas",   icon: "⊗", label: "Alertas" },
+  { id: "overview", icon: "⊡", label: "Panel de Control" },
+  { id: "mapa", icon: "⊕", label: "Mapa" },
+  { id: "sedes", icon: "⊞", label: "Por Sede" },
+  { id: "alertas", icon: "⊗", label: "Alertas" },
   { id: "historial", icon: "☰", label: "Historial" },
 ];
 
@@ -20,9 +20,12 @@ interface Props {
   estados: string[];
   setEstados: (e: string[]) => void;
   ts: string;
+  isCollapsed: boolean;
+  setIsCollapsed: (v: boolean) => void;
 }
 
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
+function Toggle({ label, checked, onChange, isCollapsed }: { label: string; checked: boolean; onChange: () => void, isCollapsed: boolean }) {
+  if (isCollapsed) return null;
   return (
     <label className="flex items-center gap-2 cursor-pointer mb-1 text-xs">
       <input
@@ -36,7 +39,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   );
 }
 
-export default function Sidebar({ open = false, page, setPage, zonas, setZonas, estados, setEstados, ts }: Props) {
+export default function Sidebar({ open = false, page, setPage, zonas, setZonas, estados, setEstados, ts, isCollapsed, setIsCollapsed }: Props) {
   const { toggle } = useTheme();
 
   function toggleZona(z: string) {
@@ -47,26 +50,31 @@ export default function Sidebar({ open = false, page, setPage, zonas, setZonas, 
   }
 
   return (
-    <aside className={`fixed top-0 left-0 w-[230px] h-screen z-50 flex flex-col
+    <aside className={`fixed top-0 left-0 h-screen z-50 flex flex-col
       dark:bg-dark-surface dark:border-dark-border bg-white border-light-border
-      border-r overflow-y-auto transition-transform duration-300 ease-in-out
+      border-r overflow-y-auto transition-all duration-300 ease-in-out
+      ${isCollapsed ? "w-[70px]" : "w-[230px]"}
       ${open ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}>
 
       {/* Logo */}
-      <div className="px-4 py-5 mb-2">
-        <img src="/comutel-logo.png" alt="COMUTEL"
-          className="h-7 w-auto dark:brightness-0 dark:invert mb-1" />
-        <div className="text-[10px] tracking-wide dark:text-dark-muted text-light-muted">MONITOREO</div>
+      <div className={`px-4 py-5 mb-2 flex flex-col ${isCollapsed ? "items-center" : ""}`}>
+        <img
+          src={isCollapsed ? "/short-logo.png" : "/comutel-logo.png"}
+          alt="COMUTEL"
+          className={`object-contain dark:brightness-0 dark:invert mb-1 transition-all ${isCollapsed ? "h-8 w-auto" : "h-7 w-auto max-w-[150px]"}`}
+        />
+        {!isCollapsed && <div className="text-[13px] tracking-wide dark:text-dark-muted text-light-muted">MONITOREO</div>}
       </div>
 
       {/* Toggle tema */}
       <button
         onClick={toggle}
-        className="mx-3 mb-4 py-2 px-3 rounded-lg text-[11px] font-semibold
+        title={isCollapsed ? "Cambiar tema" : ""}
+        className={`mx-3 mb-4 py-2 rounded-lg transition-all hover:opacity-80
           dark:border-dark-border dark:text-dark-text dark:bg-dark-card
-          border border-light-border text-light-text bg-white
-          cursor-pointer transition-colors hover:opacity-80">
-        ◐ Cambiar tema
+          border border-light-border text-light-text bg-white cursor-pointer
+          ${isCollapsed ? "px-0 text-[14px]" : "px-3 text-[11px] font-semibold"}`}>
+        {isCollapsed ? "◐" : "◐ Cambiar tema"}
       </button>
 
       {/* Nav */}
@@ -77,40 +85,61 @@ export default function Sidebar({ open = false, page, setPage, zonas, setZonas, 
             <button
               key={id}
               onClick={() => setPage(id)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 mb-0.5
-                rounded-r-lg text-left transition-all cursor-pointer
+              title={isCollapsed ? label : ""}
+              className={`w-full flex items-center mb-0.5 rounded-r-lg text-left transition-all cursor-pointer
                 border-l-[3px]
+                ${isCollapsed ? "justify-center px-0 py-3" : "gap-2.5 px-3 py-2.5"}
                 ${active
                   ? "dark:border-brand-blue border-brand-blue dark:bg-dark-border/40 bg-blue-50"
                   : "border-transparent bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
                 }`}>
-              <span className="text-sm opacity-70">{icon}</span>
-              <span className={`text-[13px] ${active ? "font-bold dark:text-dark-text text-light-text" : "font-medium dark:text-white/55 text-light-muted"}`}>
-                {label}
-              </span>
+              <span className={`opacity-70 transition-all dark:text-white ${isCollapsed ? "text-lg" : "text-sm"}`}>{icon}</span>
+              {!isCollapsed && (
+                <span className={`text-[13px] ${active ? "font-bold dark:text-dark-text text-light-text" : "font-medium dark:text-white/55 text-light-muted"}`}>
+                  {label}
+                </span>
+              )}
             </button>
           );
         })}
       </nav>
 
       {/* Filtros */}
-      <div className="px-4 pt-4 border-t dark:border-dark-border border-light-border">
-        <div className="text-[9px] font-bold tracking-widest dark:text-dark-muted text-light-muted mb-3 uppercase">
-          Filtros
-        </div>
-        <div className="text-[11px] dark:text-dark-text text-light-text mb-1.5">Zona</div>
-        <Toggle label="Lima"      checked={zonas.includes("Lima")}      onChange={() => toggleZona("Lima")} />
-        <Toggle label="Provincia" checked={zonas.includes("Provincia")} onChange={() => toggleZona("Provincia")} />
+      {!isCollapsed && (
+        <div className="px-4 pt-4 border-t dark:border-dark-border border-light-border">
+          <div className="text-[9px] font-bold tracking-widest dark:text-dark-muted text-light-muted mb-3 uppercase">
+            Filtros
+          </div>
+          <div className="text-[11px] dark:text-dark-text text-light-text mb-1.5">Zona</div>
+          <Toggle label="Lima" checked={zonas.includes("Lima")} onChange={() => toggleZona("Lima")} isCollapsed={isCollapsed} />
+          <Toggle label="Provincia" checked={zonas.includes("Provincia")} onChange={() => toggleZona("Provincia")} isCollapsed={isCollapsed} />
 
-        <div className="text-[11px] dark:text-dark-text text-light-text mt-3 mb-1.5">Estado</div>
-        <Toggle label="Online"  checked={estados.includes("Online")}  onChange={() => toggleEstado("Online")} />
-        <Toggle label="Offline" checked={estados.includes("Offline")} onChange={() => toggleEstado("Offline")} />
-      </div>
+          <div className="text-[11px] dark:text-dark-text text-light-text mt-3 mb-1.5">Estado</div>
+          <Toggle label="Online" checked={estados.includes("Online")} onChange={() => toggleEstado("Online")} isCollapsed={isCollapsed} />
+          <Toggle label="Offline" checked={estados.includes("Offline")} onChange={() => toggleEstado("Offline")} isCollapsed={isCollapsed} />
+        </div>
+      )}
 
       {/* Footer sync */}
-      <div className="mt-auto mx-4 mb-4 flex justify-between items-center">
-        <span className="text-[9px] dark:text-dark-muted text-light-muted tracking-wide">{ts}</span>
-        <span className="live-dot text-[9px] font-bold tracking-widest text-brand-green">● LIVE</span>
+      <div className={`mt-auto px-4 mb-4 flex flex-col gap-2 ${isCollapsed ? "items-center" : ""}`}>
+        {!isCollapsed && (
+          <div className="flex justify-between items-center w-full">
+            <span className="text-[9px] dark:text-dark-muted text-light-muted tracking-wide">{ts}</span>
+            <span className="live-dot text-[9px] font-bold tracking-widest text-brand-green">● LIVE</span>
+          </div>
+        )}
+
+        {/* Botón de Contraer/Expandir (Opción A - Abajo) */}
+        <button
+          onClick={() => setIsCollapsed(!isCollapsed)}
+          className={`w-full py-2 rounded-lg border dark:border-dark-border border-light-border
+            dark:text-dark-text text-light-text hover:bg-black/5 dark:hover:bg-white/5
+            transition-all cursor-pointer flex items-center justify-center
+            ${isCollapsed ? "text-lg" : "text-xs gap-2"}`}
+        >
+          <span>{isCollapsed ? "»" : "«"}</span>
+          {!isCollapsed && <span>Contraer menú</span>}
+        </button>
       </div>
     </aside>
   );

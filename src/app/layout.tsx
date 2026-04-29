@@ -5,6 +5,7 @@ import { Providers } from "./providers";
 export const metadata: Metadata = {
   title: "Lexmark Monitor",
   description: "Dashboard de monitoreo de impresoras Lexmark – Molitalia Perú",
+  icons: { icon: "/short-logo.png" },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

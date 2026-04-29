@@ -14,6 +14,7 @@ export default function DashboardClient() {
   const [zonas, setZonas]       = useState(["Lima", "Provincia"]);
   const [estados, setEstados]   = useState(["Online", "Offline"]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const { data, isLoading, isError } = useData();
 
@@ -48,9 +49,11 @@ export default function DashboardClient() {
         zonas={zonas} setZonas={setZonas}
         estados={estados} setEstados={setEstados}
         ts={ts}
+        isCollapsed={isCollapsed}
+        setIsCollapsed={setIsCollapsed}
       />
 
-      <main className="lg:ml-[230px] min-h-screen px-4 sm:px-6 lg:px-9 py-5 lg:py-8">
+      <main className={`${isCollapsed ? "lg:ml-[70px]" : "lg:ml-[230px]"} min-h-screen px-4 sm:px-6 lg:px-9 py-5 lg:py-8 transition-all duration-300`}>
 
         {/* Header móvil con botón hamburguesa */}
         <div className="flex items-center gap-3 mb-5 lg:hidden">
