@@ -51,17 +51,17 @@ export interface DashData {
   ts: string;
 }
 
-export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial";
+export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial" | "analiticas";
 
 export const SUMINISTROS: [string, string][] = [
   ["TONER_NEGRO",       "Tóner Negro"],
   ["TONER_CIAN",        "Tóner Cián"],
   ["TONER_MAGENTA",     "Tóner Magenta"],
   ["TONER_AMARILLO",    "Tóner Amarillo"],
-  ["FOTO_NEGRO",        "Fotocond. Negro"],
-  ["FOTO_CIAN",         "Fotocond. Cián"],
-  ["FOTO_MAGENTA",      "Fotocond. Magenta"],
-  ["FOTO_AMARILLO",     "Fotocond. Amarillo"],
+  ["FOTO_NEGRO",        "Fotoconductor Negro"],
+  ["FOTO_CIAN",         "Fotoconductor Cián"],
+  ["FOTO_MAGENTA",      "Fotoconductor Magenta"],
+  ["FOTO_AMARILLO",     "Fotoconductor Amarillo"],
   ["REVELADOR_NEGRO",   "Revelador Negro"],
   ["KIT_MANTENIMIENTO", "Kit Mantenimiento"],
   ["KIT_FUSOR",         "Kit Fusor"],

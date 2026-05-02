@@ -258,10 +258,12 @@ async def send_alert():
     </div>"""
 
     # ── Enviar ───────────────────────────────────────────────────────────────
+    to_list = [addr.strip() for addr in EMAIL_TO.replace(";", ",").split(",") if addr.strip()]
+
     msg = MIMEMultipart("alternative")
     msg["Subject"] = f"⚠️ Alerta suministros Lexmark – {len(alertas)} impresoras al {now_str}"
     msg["From"]    = EMAIL_FROM
-    msg["To"]      = EMAIL_TO
+    msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html, "html"))
 
     try:
@@ -269,7 +271,7 @@ async def send_alert():
             server.ehlo()
             server.starttls()
             server.login(EMAIL_FROM, EMAIL_PASS)
-            server.sendmail(EMAIL_FROM, EMAIL_TO, msg.as_string())
+            server.sendmail(EMAIL_FROM, to_list, msg.as_string())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al enviar correo: {e}")
 

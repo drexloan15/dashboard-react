@@ -6,6 +6,7 @@ import Mapa from "@/components/pages/Mapa";
 import Sedes from "@/components/pages/Sedes";
 import Alertas from "@/components/pages/Alertas";
 import Historial from "@/components/pages/Historial";
+import Analiticas from "@/components/pages/Analiticas";
 import { useData } from "@/hooks/useData";
 import type { Page } from "@/types";
 
@@ -96,6 +97,7 @@ export default function DashboardClient() {
             {page === "sedes"     && <Sedes     printers={printers} />}
             {page === "alertas"   && <Alertas   printers={printers} />}
             {page === "historial" && <Historial historial={historial} />}
+            {page === "analiticas" && <Analiticas printers={printers} historial={historial} />}
           </>
         )}
       </main>

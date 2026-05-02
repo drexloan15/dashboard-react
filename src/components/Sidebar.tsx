@@ -8,6 +8,7 @@ const NAV: { id: Page; icon: string; label: string }[] = [
   { id: "sedes", icon: "⊞", label: "Por Sede" },
   { id: "alertas", icon: "⊗", label: "Alertas" },
   { id: "historial", icon: "☰", label: "Historial" },
+  { id: "analiticas", icon: "◈", label: "Analíticas" },
 ];
 
 interface Props {
@@ -19,7 +20,7 @@ interface Props {
   setZonas: (z: string[]) => void;
   estados: string[];
   setEstados: (e: string[]) => void;
-  ts: string;
+  ts?: string;
   isCollapsed: boolean;
   setIsCollapsed: (v: boolean) => void;
 }
@@ -86,18 +87,22 @@ export default function Sidebar({ open = false, page, setPage, zonas, setZonas, 
               key={id}
               onClick={() => setPage(id)}
               title={isCollapsed ? label : ""}
-              className={`w-full flex items-center mb-0.5 rounded-r-lg text-left transition-all cursor-pointer
+              className={`w-full flex items-center mb-0.5 rounded-r-lg text-left transition-all cursor-pointer relative
                 border-l-[3px]
                 ${isCollapsed ? "justify-center px-0 py-3" : "gap-2.5 px-3 py-2.5"}
                 ${active
-                  ? "dark:border-brand-blue border-brand-blue dark:bg-dark-border/40 bg-blue-50"
-                  : "border-transparent bg-transparent hover:bg-black/5 dark:hover:bg-white/5"
+                  ? "dark:border-brand-blue border-brand-blue dark:bg-brand-blue/10 bg-brand-blue/5"
+                  : "border-transparent bg-transparent hover:opacity-80"
                 }`}>
-              <span className={`opacity-70 transition-all dark:text-white ${isCollapsed ? "text-lg" : "text-sm"}`}>{icon}</span>
+              <span className={`transition-all dark:text-white ${isCollapsed ? "text-lg" : "text-sm"} ${active ? "opacity-100 text-brand-blue" : "opacity-70"}`}>
+                {icon}
+              </span>
               {!isCollapsed && (
-                <span className={`text-[13px] ${active ? "font-bold dark:text-dark-text text-light-text" : "font-medium dark:text-white/55 text-light-muted"}`}>
-                  {label}
-                </span>
+                <div className="flex items-center justify-between flex-1">
+                  <span className={`text-[13px] ${active ? "font-bold dark:text-dark-text text-light-text" : "font-medium dark:text-white/55 text-light-muted"}`}>
+                    {label}
+                  </span>
+                </div>
               )}
             </button>
           );
