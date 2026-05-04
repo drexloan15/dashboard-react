@@ -4,3 +4,4 @@ backend/monitoreo-impresoras.json
 monitoreo-impresoras-a2198e85d49c.json
 *.json.bak
 .env*
+agente/

@@ -73,8 +73,8 @@ function SedeList({ printers, sede, onSelectIP, onBack }: { printers: Printer[];
         {printers.sort((a, b) => a.IP.localeCompare(b.IP)).map((p, j) => {
           const mini = SUMINISTROS.map(([col, label]) => {
             const v = toNum(p[col]);
-            return v !== null ? { label: label.slice(0, 13), v } : null;
-          }).filter(Boolean) as { label: string; v: number }[];
+            return v !== null ? { col, label: label.slice(0, 13), v } : null;
+          }).filter(Boolean) as { col: string; label: string; v: number }[];
 
           return (
             <button key={p.IP} onClick={() => onSelectIP(p.IP)}
@@ -90,7 +90,7 @@ function SedeList({ printers, sede, onSelectIP, onBack }: { printers: Printer[];
               </div>
               <div className="flex-1 px-4">
                 {mini.length > 0 ? mini.slice(0, 6).map(m => (
-                  <div key={m.label} className="flex items-center gap-1 mb-1">
+                  <div key={m.col} className="flex items-center gap-1 mb-1">
                     <span className="text-[9px] dark:text-dark-muted text-light-muted w-24 shrink-0">{m.label}</span>
                     <div className="w-16 h-[3px] dark:bg-dark-border2 bg-light-border2 rounded-full overflow-hidden">
                       <div className="h-full rounded-full" style={{ width: `${Math.min(m.v, 100)}%`, background: nivelColor(m.v, "dark") }} />

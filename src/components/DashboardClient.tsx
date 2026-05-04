@@ -11,16 +11,16 @@ import { useData } from "@/hooks/useData";
 import type { Page } from "@/types";
 
 export default function DashboardClient() {
-  const [page, setPage]         = useState<Page>("overview");
-  const [zonas, setZonas]       = useState(["Lima", "Provincia"]);
-  const [estados, setEstados]   = useState(["Online", "Offline"]);
+  const [page, setPage] = useState<Page>("overview");
+  const [zonas, setZonas] = useState(["Lima", "Provincia"]);
+  const [estados, setEstados] = useState(["Online", "Offline"]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const { data, isLoading, isError } = useData();
 
   const printers = (data?.estado ?? []).filter(p => {
-    const zonaOk   = !zonas.length || !p.ZONA || zonas.includes(p.ZONA);
+    const zonaOk = !zonas.length || !p.ZONA || zonas.includes(p.ZONA);
     const estadoOk = !estados.length || estados.includes(p.ESTADO);
     return zonaOk && estadoOk;
   });
@@ -65,9 +65,9 @@ export default function DashboardClient() {
             aria-label="Abrir menú"
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
-              <rect y="2"  width="18" height="2" rx="1"/>
-              <rect y="8"  width="18" height="2" rx="1"/>
-              <rect y="14" width="18" height="2" rx="1"/>
+              <rect y="2" width="18" height="2" rx="1" />
+              <rect y="8" width="18" height="2" rx="1" />
+              <rect y="14" width="18" height="2" rx="1" />
             </svg>
           </button>
           <div className="flex items-center">
@@ -79,7 +79,7 @@ export default function DashboardClient() {
         {isLoading && (
           <div className="flex flex-col items-center justify-center h-80 gap-4">
             <div className="w-10 h-10 rounded-full border-4 border-brand-blue border-t-transparent animate-spin" />
-            <p className="dark:text-dark-muted text-light-muted text-[13px]">Conectando con Google Sheets…</p>
+            <p className="dark:text-dark-muted text-light-muted text-[13px]">Conectando con La base de datos…</p>
           </div>
         )}
         {isError && !isLoading && (
@@ -92,10 +92,10 @@ export default function DashboardClient() {
         )}
         {!isLoading && !isError && (
           <>
-            {page === "overview"  && <Overview  printers={printers} historial={historial} />}
-            {page === "mapa"      && <Mapa      printers={printers} />}
-            {page === "sedes"     && <Sedes     printers={printers} />}
-            {page === "alertas"   && <Alertas   printers={printers} />}
+            {page === "overview" && <Overview printers={printers} historial={historial} />}
+            {page === "mapa" && <Mapa printers={printers} />}
+            {page === "sedes" && <Sedes printers={printers} />}
+            {page === "alertas" && <Alertas printers={printers} />}
             {page === "historial" && <Historial historial={historial} />}
             {page === "analiticas" && <Analiticas printers={printers} historial={historial} />}
           </>
