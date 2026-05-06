@@ -60,6 +60,7 @@ app.add_middleware(
 
 # ── ESTADO GLOBAL ────────────────────────────────────────────────────────────
 _cache:       dict                                         = {}
+_pr_cache:    dict                                         = {}
 _refresh_lock = threading.Lock()
 _db_pool:     psycopg2.pool.ThreadedConnectionPool | None  = None
 
@@ -169,6 +170,82 @@ def init_db():
 
     print("[db] tablas listas")
 
+# ── PR_STATS: CACHE ───────────────────────────────────────────────────────────
+def _load_pr_cache():
+    global _pr_cache
+    try:
+        with get_db() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            # Verificar que la tabla existe
+            cur.execute("SELECT to_regclass('public.pr_stats')")
+            if cur.fetchone()[0] is None:
+                _pr_cache = {"exists": False}
+                return
+
+            cur.execute("""
+                SELECT COUNT(*) AS jobs,
+                       COALESCE(SUM(numpages),0) AS pages,
+                       COUNT(DISTINCT userid) AS users
+                FROM pr_stats WHERE numpages > 0
+            """)
+            totales = dict(cur.fetchone())
+
+            cur.execute("""
+                SELECT userid,
+                       COUNT(*) AS jobs,
+                       COALESCE(SUM(numpages),0) AS pages
+                FROM pr_stats WHERE numpages > 0 AND userid IS NOT NULL
+                GROUP BY userid ORDER BY pages DESC LIMIT 30
+            """)
+            top_usuarios = [dict(r) for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT DATE(submitdate) AS fecha,
+                       COALESCE(SUM(numpages),0) AS pages,
+                       COUNT(*) AS jobs
+                FROM pr_stats
+                WHERE submitdate >= '2026-04-23' AND numpages > 0
+                GROUP BY DATE(submitdate)
+                ORDER BY fecha
+            """)
+            por_dia = [{"fecha": str(r["fecha"]), "pages": int(r["pages"]), "jobs": int(r["jobs"])}
+                       for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT site,
+                       COALESCE(SUM(numpages),0) AS pages,
+                       COUNT(*) AS jobs,
+                       COUNT(DISTINCT userid) AS users
+                FROM pr_stats WHERE numpages > 0 AND site IS NOT NULL
+                GROUP BY site ORDER BY pages DESC
+            """)
+            por_sede = [dict(r) for r in cur.fetchall()]
+
+            cur.execute("""
+                SELECT releasemodel,
+                       COALESCE(SUM(numpages),0) AS pages,
+                       COUNT(*) AS jobs
+                FROM pr_stats
+                WHERE numpages > 0 AND releasemodel IS NOT NULL
+                GROUP BY releasemodel ORDER BY pages DESC LIMIT 20
+            """)
+            por_modelo = [dict(r) for r in cur.fetchall()]
+
+        _pr_cache = {
+            "exists":       True,
+            "totales":      {k: int(v) for k, v in totales.items()},
+            "top_usuarios": [{k: (int(v) if k != "userid" else v) for k, v in r.items()} for r in top_usuarios],
+            "por_dia":      por_dia,
+            "por_sede":     [{k: (int(v) if k not in ("site",) else v) for k, v in r.items()} for r in por_sede],
+            "por_modelo":   [{k: (int(v) if k != "releasemodel" else v) for k, v in r.items()} for r in por_modelo],
+            "ts":           datetime.now().isoformat(),
+        }
+        print(f"[pr_cache] {totales['jobs']} jobs · {totales['users']} usuarios")
+    except Exception as e:
+        print(f"[pr_cache] error: {e}")
+        import traceback; traceback.print_exc()
+
 # ── DB: QUERIES ───────────────────────────────────────────────────────────────
 def _query_estado(conn) -> list[dict]:
     sc = ", ".join(f'{c.lower()} AS "{c}"' for c in SUPPLY_COLS)
@@ -243,7 +320,9 @@ def _bg_loop():
 # Arranque
 init_db()
 _load_cache_from_db()
+_load_pr_cache()
 threading.Thread(target=_bg_loop, daemon=True).start()
+threading.Thread(target=lambda: [time.sleep(300) or _load_pr_cache() for _ in iter(int, 1)], daemon=True).start()
 
 # ── ENDPOINTS ────────────────────────────────────────────────────────────────
 @app.get("/data")
@@ -260,6 +339,12 @@ async def get_data():
     if _cache:
         return _cache["payload"]
     return {"error": "Sin datos aun", "estado": [], "historial": [], "ts": "—"}
+
+@app.get("/pr_stats")
+async def get_pr_stats():
+    if not _pr_cache:
+        _load_pr_cache()
+    return _pr_cache if _pr_cache else {"exists": False}
 
 @app.get("/health")
 async def health():
@@ -364,4 +449,4 @@ async def send_alert():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8001, reload=False)

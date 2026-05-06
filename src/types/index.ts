@@ -51,7 +51,22 @@ export interface DashData {
   ts: string;
 }
 
-export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial" | "analiticas";
+export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial" | "analiticas" | "usuarios";
+
+export interface PrStatsTotales { jobs: number; pages: number; users: number; }
+export interface PrStatsUsuario { userid: string; jobs: number; pages: number; }
+export interface PrStatsDia     { fecha: string; pages: number; jobs: number; }
+export interface PrStatsSede    { site: string; pages: number; jobs: number; users: number; }
+export interface PrStatsModelo  { releasemodel: string; pages: number; jobs: number; }
+export interface PrStatsData {
+  exists: boolean;
+  totales?: PrStatsTotales;
+  top_usuarios?: PrStatsUsuario[];
+  por_dia?: PrStatsDia[];
+  por_sede?: PrStatsSede[];
+  por_modelo?: PrStatsModelo[];
+  ts?: string;
+}
 
 export const SUMINISTROS: [string, string][] = [
   ["TONER_NEGRO",       "Tóner Negro"],

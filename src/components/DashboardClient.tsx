@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Sidebar from "@/components/Sidebar";
 import Overview from "@/components/pages/Overview";
 import Mapa from "@/components/pages/Mapa";
@@ -7,8 +7,9 @@ import Sedes from "@/components/pages/Sedes";
 import Alertas from "@/components/pages/Alertas";
 import Historial from "@/components/pages/Historial";
 import Analiticas from "@/components/pages/Analiticas";
+import Usuarios from "@/components/pages/Usuarios";
 import { useData } from "@/hooks/useData";
-import type { Page } from "@/types";
+import type { Page, PrStatsData } from "@/types";
 
 export default function DashboardClient() {
   const [page, setPage] = useState<Page>("overview");
@@ -18,6 +19,16 @@ export default function DashboardClient() {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const { data, isLoading, isError } = useData();
+  const [prStats, setPrStats] = useState<PrStatsData | null>(null);
+
+  useEffect(() => {
+    if (page === "usuarios" && !prStats) {
+      fetch("/api/py/pr_stats")
+        .then(r => r.json())
+        .then(d => setPrStats(d as PrStatsData))
+        .catch(() => setPrStats({ exists: false }));
+    }
+  }, [page, prStats]);
 
   const printers = (data?.estado ?? []).filter(p => {
     const zonaOk = !zonas.length || !p.ZONA || zonas.includes(p.ZONA);
@@ -98,6 +109,7 @@ export default function DashboardClient() {
             {page === "alertas" && <Alertas printers={printers} />}
             {page === "historial" && <Historial historial={historial} />}
             {page === "analiticas" && <Analiticas printers={printers} historial={historial} />}
+            {page === "usuarios"   && <Usuarios data={prStats} />}
           </>
         )}
       </main>

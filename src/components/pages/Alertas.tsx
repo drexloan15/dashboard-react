@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Card from "@/components/ui/Card";
 import StatPill from "@/components/ui/StatPill";
 import { SUMINISTROS } from "@/types";
@@ -11,26 +11,39 @@ type SendState = "idle" | "loading" | "ok" | "error";
 export default function Alertas({ printers }: { printers: Printer[] }) {
   const [sendState, setSendState] = useState<SendState>("idle");
   const [sendMsg,   setSendMsg]   = useState("");
+  const [filtroSede, setFiltroSede] = useState("Todas");
+  const [filtroSum,  setFiltroSum]  = useState("Todos");
 
   type Alert = { ip: string; sede: string; area: string; modelo: string; suministro: string; nivel: "CRÍTICO" | "BAJO"; color: string; valor: number };
-  const alertas: Alert[] = [];
 
-  for (const p of printers) {
-    for (const [col, label] of SUMINISTROS) {
-      const v = toNum(p[col]);
-      if (v !== null && v <= 30) {
-        alertas.push({
-          ip: p.IP, sede: p.SEDE, area: p.AREA || "",
-          modelo: String(p.MODELO_INV || ""),
-          suministro: label,
-          nivel: v <= 10 ? "CRÍTICO" : "BAJO",
-          color: v <= 10 ? "#f04545" : "#e0b030",
-          valor: v,
-        });
+  const todasAlertas = useMemo(() => {
+    const result: Alert[] = [];
+    for (const p of printers) {
+      for (const [col, label] of SUMINISTROS) {
+        const v = toNum(p[col]);
+        if (v !== null && v <= 30) {
+          result.push({
+            ip: p.IP, sede: p.SEDE, area: p.AREA || "",
+            modelo: String(p.MODELO_INV || ""),
+            suministro: label,
+            nivel: v <= 10 ? "CRÍTICO" : "BAJO",
+            color: v <= 10 ? "#f04545" : "#e0b030",
+            valor: v,
+          });
+        }
       }
     }
-  }
-  alertas.sort((a, b) => a.valor - b.valor);
+    return result.sort((a, b) => a.valor - b.valor);
+  }, [printers]);
+
+  const sedes   = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.sede))).sort(), [todasAlertas]);
+  const sumins  = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.suministro))).sort(), [todasAlertas]);
+
+  const alertas = useMemo(() =>
+    todasAlertas.filter(a =>
+      (filtroSede === "Todas" || a.sede === filtroSede) &&
+      (filtroSum  === "Todos" || a.suministro === filtroSum)
+    ), [todasAlertas, filtroSede, filtroSum]);
 
   const cn = alertas.filter(a => a.nivel === "CRÍTICO").length;
   const bn = alertas.filter(a => a.nivel === "BAJO").length;
@@ -72,7 +85,18 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
     <div>
       <div className="flex items-start justify-between gap-4 mb-1 flex-wrap">
         <h1 className="page-title text-2xl font-bold dark:text-dark-text text-light-text">Alertas</h1>
-        <button
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={filtroSede} onChange={e => setFiltroSede(e.target.value)}
+            className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer">
+            <option value="Todas">Todas las sedes</option>
+            {sedes.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filtroSum} onChange={e => setFiltroSum(e.target.value)}
+            className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer">
+            <option value="Todos">Todos los suministros</option>
+            {sumins.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <button
           onClick={sendAlert}
           disabled={sendState === "loading"}
           className="page-title flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-semibold
@@ -81,7 +105,8 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
           style={{ animationDelay: "60ms" }}
         >
           {sendState === "loading" ? "Enviando..." : "✉ Notificar por correo"}
-        </button>
+          </button>
+        </div>
       </div>
       <p className="page-title text-[13px] dark:text-dark-muted text-light-muted mb-2" style={{ animationDelay: "60ms" }}>
         {alertas.length} alertas activas

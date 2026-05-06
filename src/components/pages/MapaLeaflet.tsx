@@ -1,6 +1,7 @@
 "use client";
 import L from "leaflet";
 import { MapContainer, TileLayer, Marker, Popup, Tooltip } from "react-leaflet";
+import MarkerClusterGroup from "react-leaflet-cluster";
 import "leaflet/dist/leaflet.css";
 
 export interface OfflinePrinter { ip: string; modelo: string; }
@@ -69,9 +70,20 @@ function pinIcon(color: string, pct: number, total: number) {
   });
 }
 
-export default function MapaLeaflet({ sedes }: { sedes: SedeInfo[] }) {
-  const spread = spreadOverlapping(sedes);
+function clusterIcon(cluster: { getChildCount: () => number }) {
+  const n = cluster.getChildCount();
+  return L.divIcon({
+    html: `<div class="map-pin" style="--c:#3d8ef5;--g:rgba(61,142,245,0.28)">
+             <span class="mp-pct">${n}</span>
+             <span class="mp-eq">sedes</span>
+           </div>`,
+    className: "",
+    iconSize: [56, 56],
+    iconAnchor: [28, 28],
+  });
+}
 
+export default function MapaLeaflet({ sedes }: { sedes: SedeInfo[] }) {
   return (
     <MapContainer
       center={[-9.30, -75.00]}
@@ -85,10 +97,16 @@ export default function MapaLeaflet({ sedes }: { sedes: SedeInfo[] }) {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       />
 
-      {spread.map((s, i) => (
+      <MarkerClusterGroup
+        iconCreateFunction={clusterIcon}
+        maxClusterRadius={60}
+        showCoverageOnHover={false}
+        chunkedLoading
+      >
+      {sedes.map((s, i) => (
         <Marker
           key={i}
-          position={[s.displayLat, s.displayLon]}
+          position={[s.lat, s.lon]}
           icon={pinIcon(s.color, s.pct, s.total)}
         >
           {/* Nombre al hacer hover */}
@@ -146,6 +164,7 @@ export default function MapaLeaflet({ sedes }: { sedes: SedeInfo[] }) {
           </Popup>
         </Marker>
       ))}
+      </MarkerClusterGroup>
     </MapContainer>
   );
 }
