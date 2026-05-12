@@ -13,6 +13,24 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
   const [sendMsg,   setSendMsg]   = useState("");
   const [filtroSede, setFiltroSede] = useState("Todas");
   const [filtroSum,  setFiltroSum]  = useState("Todos");
+  const [listos, setListos] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("alertas_listos");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
+
+  function alertKey(a: { ip: string; suministro: string }) {
+    return `${a.ip}::${a.suministro}`;
+  }
+  function toggleListo(key: string) {
+    setListos(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      try { localStorage.setItem("alertas_listos", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }
 
   type Alert = { ip: string; sede: string; area: string; modelo: string; suministro: string; nivel: "CRÍTICO" | "BAJO"; color: string; valor: number };
 
@@ -125,8 +143,11 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
         <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "80ms" }}>
           <StatPill value={cn} label="Críticos ≤10%" color="#f04545" />
         </Card>
-        <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "140ms" }}>
+        <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "120ms" }}>
           <StatPill value={bn} label="Bajos 11-30%"  color="#e0b030" />
+        </Card>
+        <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "160ms" }}>
+          <StatPill value={listos.size} label="Listos p/ envío" color="#20c97a" />
         </Card>
       </div>
 
@@ -135,26 +156,50 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
           Suministros en alerta
         </p>
         <div className="rounded-lg overflow-hidden dark:border-dark-border border border-light-border">
-          {alertas.map((a, i) => (
-            <div key={i}
-              className="row-enter flex items-center justify-between px-4 py-3 dark:border-dark-border border-b border-light-border last:border-0"
-              style={{ background: a.color + "08", animationDelay: `${200 + Math.min(i * 18, 300)}ms` }}>
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
-                  style={{ background: a.color + "22", color: a.color }}>
-                  {a.nivel}
-                </span>
-                <span className="font-mono text-[12px] font-semibold dark:text-dark-text text-light-text">{a.ip}</span>
-                <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.sede}</span>
-                {a.modelo && <span className="text-[10px] font-medium dark:text-dark-muted text-light-muted bg-black/10 dark:bg-white/5 px-1.5 py-0.5 rounded">{a.modelo}</span>}
-                {a.area && <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.area.slice(0, 28)}</span>}
+          {alertas.map((a, i) => {
+            const key = alertKey(a);
+            const listo = listos.has(key);
+            return (
+              <div key={i}
+                className="row-enter flex items-center justify-between px-4 py-3 dark:border-dark-border border-b border-light-border last:border-0 transition-colors"
+                style={{ background: listo ? "#20c97a08" : a.color + "08", animationDelay: `${200 + Math.min(i * 18, 300)}ms` }}>
+                <div className="flex items-center gap-3 flex-wrap">
+                  {!listo && (
+                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
+                      style={{ background: a.color + "22", color: a.color }}>
+                      {a.nivel}
+                    </span>
+                  )}
+                  {listo && (
+                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-brand-green/20 text-brand-green">
+                      LISTO
+                    </span>
+                  )}
+                  <span className={`font-mono text-[12px] font-semibold ${listo ? "line-through dark:text-dark-muted text-light-muted" : "dark:text-dark-text text-light-text"}`}>
+                    {a.ip}
+                  </span>
+                  <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.sede}</span>
+                  {a.modelo && <span className="text-[10px] font-medium dark:text-dark-muted text-light-muted bg-black/10 dark:bg-white/5 px-1.5 py-0.5 rounded">{a.modelo}</span>}
+                  {a.area && <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.area.slice(0, 28)}</span>}
+                </div>
+                <div className="flex items-center gap-3 shrink-0">
+                  <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.suministro}</span>
+                  <span className="text-[15px] font-bold" style={{ color: listo ? "#20c97a" : a.color }}>{a.valor.toFixed(0)}%</span>
+                  <button onClick={() => toggleListo(key)}
+                    title={listo ? "Desmarcar" : "Marcar como listo para envío"}
+                    className="w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all cursor-pointer shrink-0"
+                    style={{
+                      borderColor: listo ? "#20c97a" : "#4a5568",
+                      background: listo ? "#20c97a" : "transparent",
+                    }}>
+                    {listo && <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+                      <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>}
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.suministro}</span>
-                <span className="text-[15px] font-bold" style={{ color: a.color }}>{a.valor.toFixed(0)}%</span>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
     </div>

@@ -59,15 +59,23 @@ app.add_middleware(
 )
 
 # ── ESTADO GLOBAL ────────────────────────────────────────────────────────────
-_cache:       dict                                         = {}
-_pr_cache:    dict                                         = {}
-_refresh_lock = threading.Lock()
-_db_pool:     psycopg2.pool.ThreadedConnectionPool | None  = None
+_cache:          dict                                         = {}
+_pr_cache:       dict                                         = {}
+_refresh_lock    = threading.Lock()
+_db_pool:        psycopg2.pool.ThreadedConnectionPool | None  = None
+_db_last_error:  float                                        = 0.0
+DB_ERROR_BACKOFF = 30  # segundos entre reintentos tras fallo de conexión
 
 # ── DB: POOL ─────────────────────────────────────────────────────────────────
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool | None:
-    global _db_pool
-    if _db_pool is None and DATABASE_URL:
+    global _db_pool, _db_last_error
+    if _db_pool is not None:
+        return _db_pool
+    if not DATABASE_URL:
+        return None
+    if time.time() - _db_last_error < DB_ERROR_BACKOFF:
+        return None  # esperar backoff antes de reintentar
+    try:
         from urllib.parse import urlparse
         u = urlparse(DATABASE_URL)
         _db_pool = psycopg2.pool.ThreadedConnectionPool(
@@ -75,23 +83,65 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool | None:
             host=u.hostname, port=u.port or 5432,
             dbname=u.path.lstrip("/"),
             user=u.username, password=u.password,
+            connect_timeout=5,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=3,
         )
-    return _db_pool
+        return _db_pool
+    except Exception as e:
+        _db_last_error = time.time()
+        print(f"[db] sin conexion: {e}")
+        return None
+
+def _reset_pool():
+    """Descarta el pool actual para forzar reconexión en el próximo intento."""
+    global _db_pool
+    try:
+        if _db_pool:
+            _db_pool.closeall()
+    except Exception:
+        pass
+    _db_pool = None
 
 @contextmanager
 def get_db():
     pool = _get_pool()
     if pool is None:
-        raise RuntimeError("DATABASE_URL no configurado")
+        raise RuntimeError("PostgreSQL no disponible")
     conn = pool.getconn()
+    # Validar que la conexión sigue viva antes de usarla
+    try:
+        if conn.closed or conn.status != psycopg2.extensions.STATUS_READY:
+            raise psycopg2.OperationalError("conexión no disponible")
+        conn.reset()  # descarta cualquier transacción pendiente
+    except psycopg2.OperationalError:
+        try: pool.putconn(conn, close=True)
+        except Exception: pass
+        _reset_pool()
+        raise RuntimeError("Conexión a PostgreSQL rota, reintentando...")
+    broken = False
     try:
         yield conn
         conn.commit()
+    except psycopg2.OperationalError:
+        broken = True
+        _reset_pool()
+        raise
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except psycopg2.OperationalError:
+            broken = True
+            _reset_pool()
         raise
     finally:
-        pool.putconn(conn)
+        if not broken:
+            try:
+                pool.putconn(conn)
+            except Exception:
+                _reset_pool()
 
 # ── DB: CREAR / MIGRAR TABLAS ────────────────────────────────────────────────
 def init_db():
@@ -179,7 +229,8 @@ def _load_pr_cache():
 
             # Verificar que la tabla existe
             cur.execute("SELECT to_regclass('public.pr_stats')")
-            if cur.fetchone()[0] is None:
+            row = cur.fetchone()
+            if row is None or row["to_regclass"] is None:
                 _pr_cache = {"exists": False}
                 return
 
@@ -345,6 +396,54 @@ async def get_pr_stats():
     if not _pr_cache:
         _load_pr_cache()
     return _pr_cache if _pr_cache else {"exists": False}
+
+@app.get("/pr_stats/usuario/{userid}")
+async def get_usuario_jobs(userid: str):
+    try:
+        with get_db() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+            cur.execute("""
+                SELECT printjobname,
+                       numpages,
+                       submitdate::text AS submitdate,
+                       COALESCE(finalaction, '') AS finalaction,
+                       COALESCE(site, '')        AS site,
+                       COALESCE(releasemodel, '') AS releasemodel
+                FROM pr_stats
+                WHERE userid = %s AND numpages > 0
+                ORDER BY submitdate DESC
+            """, (userid,))
+            jobs = [dict(r) for r in cur.fetchall()]
+
+            # Páginas por día
+            cur.execute("""
+                SELECT DATE(submitdate) AS fecha,
+                       COALESCE(SUM(numpages), 0) AS pages,
+                       COUNT(*) AS jobs
+                FROM pr_stats
+                WHERE userid = %s AND numpages > 0
+                GROUP BY DATE(submitdate)
+                ORDER BY fecha
+            """, (userid,))
+            por_dia = [{"fecha": str(r["fecha"]), "pages": int(r["pages"]), "jobs": int(r["jobs"])}
+                       for r in cur.fetchall()]
+
+            # Totales por tipo (p=impresion, c=copia)
+            cur.execute("""
+                SELECT COALESCE(finalaction, '') AS tipo,
+                       COUNT(*) AS jobs,
+                       COALESCE(SUM(numpages), 0) AS pages
+                FROM pr_stats
+                WHERE userid = %s AND numpages > 0
+                GROUP BY finalaction
+            """, (userid,))
+            por_tipo = [{"tipo": r["tipo"], "jobs": int(r["jobs"]), "pages": int(r["pages"])}
+                        for r in cur.fetchall()]
+
+        return {"userid": userid, "jobs": jobs, "por_dia": por_dia, "por_tipo": por_tipo}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health():

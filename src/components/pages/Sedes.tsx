@@ -4,7 +4,7 @@ import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import SupplyBar from "@/components/ui/SupplyBar";
 import { SUMINISTROS } from "@/types";
-import type { Printer } from "@/types";
+import type { Printer, HistorialRow } from "@/types";
 import { toNum, nivelColor } from "@/lib/utils";
 
 function Dot({ estado }: { estado: string }) {
@@ -15,8 +15,37 @@ function Dot({ estado }: { estado: string }) {
   );
 }
 
-function IPDetail({ p, onBack, onBackSede, sede }: { p: Printer; onBack: () => void; onBackSede: () => void; sede: string }) {
+function formatTs(ts: string): string {
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return ts.slice(0, 16);
+  const fecha = d.toLocaleDateString("es-PE", { day: "2-digit", month: "2-digit", year: "numeric" });
+  const hora  = d.toLocaleTimeString("es-PE", { hour: "2-digit", minute: "2-digit" });
+  return `${fecha} ${hora}`;
+}
+
+function detectCambios(ip: string, historial: HistorialRow[]): { col: string; label: string; fecha: string }[] {
+  const rows = historial
+    .filter(r => r.IP === ip && r._ts)
+    .sort((a, b) => (a._ts! > b._ts! ? 1 : -1));
+
+  const cambios: { col: string; label: string; fecha: string }[] = [];
+  for (const [col, label] of SUMINISTROS) {
+    let prev: number | null = null;
+    let lastCambio: string | null = null;
+    for (const row of rows) {
+      const v = toNum(row[col]);
+      if (v === null) { prev = null; continue; }
+      if (prev !== null && (v > prev + 5 || v < prev - 40)) lastCambio = row._ts!;
+      prev = v;
+    }
+    if (lastCambio) cambios.push({ col, label, fecha: formatTs(lastCambio) });
+  }
+  return cambios.sort((a, b) => b.fecha.localeCompare(a.fecha));
+}
+
+function IPDetail({ p, onBack, onBackSede, sede, historial }: { p: Printer; onBack: () => void; onBackSede: () => void; sede: string; historial: HistorialRow[] }) {
   const ec = p.ESTADO === "Online" ? "#20c97a" : "#f04545";
+  const cambios = detectCambios(p.IP, historial);
   return (
     <div>
       <div className="flex items-center gap-1 mb-5 text-[12px]">
@@ -53,11 +82,29 @@ function IPDetail({ p, onBack, onBackSede, sede }: { p: Printer; onBack: () => v
           {SUMINISTROS.map(([col, label]) => <SupplyBar key={col} label={label} val={toNum(p[col])} />)}
         </div>
       </Card>
+
+      {cambios.length > 0 && (
+        <Card className="mt-4">
+          <p className="text-[10px] font-bold dark:text-dark-muted text-light-muted uppercase tracking-widest mb-4">
+            Cambios de suministros detectados
+          </p>
+          <div className="rounded-lg overflow-hidden dark:border-dark-border border border-light-border">
+            {cambios.map((c, i) => (
+              <div key={c.col}
+                className="flex items-center justify-between px-4 py-2.5 dark:border-dark-border border-b border-light-border last:border-0"
+                style={{ animationDelay: `${i * 30}ms` }}>
+                <span className="text-[12px] dark:text-dark-text text-light-text">{c.label}</span>
+                <span className="text-[11px] font-mono dark:text-dark-muted text-light-muted">{c.fecha}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
 
-function SedeList({ printers, sede, onSelectIP, onBack }: { printers: Printer[]; sede: string; onSelectIP: (ip: string) => void; onBack: () => void }) {
+function SedeList({ printers, sede, onSelectIP, onBack, historial }: { printers: Printer[]; sede: string; onSelectIP: (ip: string) => void; onBack: () => void; historial: HistorialRow[] }) {
   const zona = printers[0]?.ZONA || "";
   return (
     <div>
@@ -75,6 +122,10 @@ function SedeList({ printers, sede, onSelectIP, onBack }: { printers: Printer[];
             const v = toNum(p[col]);
             return v !== null ? { col, label: label.slice(0, 13), v } : null;
           }).filter(Boolean) as { col: string; label: string; v: number }[];
+          const cambiosRecientes = detectCambios(p.IP, historial).filter(c => {
+            const dias = (Date.now() - new Date(c.fecha).getTime()) / 86400000;
+            return dias <= 30;
+          }).length;
 
           return (
             <button key={p.IP} onClick={() => onSelectIP(p.IP)}
@@ -87,6 +138,11 @@ function SedeList({ printers, sede, onSelectIP, onBack }: { printers: Printer[];
                   <span className="font-mono text-[12px] font-semibold dark:text-dark-text text-light-text">{p.IP}</span>
                 </div>
                 <div className="text-[11px] dark:text-dark-muted text-light-muted pl-3.5">{String(p.AREA || "").slice(0, 45)}</div>
+                {cambiosRecientes > 0 && (
+                  <span className="ml-3.5 mt-0.5 inline-block text-[8px] font-bold px-1.5 py-0.5 rounded-full bg-brand-cyan/15 text-brand-cyan">
+                    {cambiosRecientes} cambio{cambiosRecientes > 1 ? "s" : ""}
+                  </span>
+                )}
               </div>
               <div className="flex-1 px-4">
                 {mini.length > 0 ? mini.slice(0, 6).map(m => (
@@ -108,7 +164,7 @@ function SedeList({ printers, sede, onSelectIP, onBack }: { printers: Printer[];
   );
 }
 
-export default function Sedes({ printers }: { printers: Printer[] }) {
+export default function Sedes({ printers, historial = [] }: { printers: Printer[]; historial?: HistorialRow[] }) {
   const [sedeSel, setSedeSel] = useState<string | null>(null);
   const [ipSel, setIpSel] = useState<string | null>(null);
 
@@ -118,13 +174,13 @@ export default function Sedes({ printers }: { printers: Printer[] }) {
   if (ipSel) {
     const p = printers.find(x => x.IP === ipSel);
     if (!p) return null;
-    return <IPDetail p={p} sede={sedeSel || ""} onBack={() => setIpSel(null)} onBackSede={() => { setIpSel(null); setSedeSel(null); }} />;
+    return <IPDetail p={p} sede={sedeSel || ""} onBack={() => setIpSel(null)} onBackSede={() => { setIpSel(null); setSedeSel(null); }} historial={historial} />;
   }
 
   // Lista IPs de sede
   if (sedeSel) {
     const df_s = printers.filter(p => p.SEDE === sedeSel);
-    return <SedeList printers={df_s} sede={sedeSel} onSelectIP={setIpSel} onBack={() => setSedeSel(null)} />;
+    return <SedeList printers={df_s} sede={sedeSel} onSelectIP={setIpSel} onBack={() => setSedeSel(null)} historial={historial} />;
   }
 
   // Grid sedes

@@ -105,11 +105,11 @@ export default function DashboardClient() {
           <>
             {page === "overview" && <Overview printers={printers} historial={historial} />}
             {page === "mapa" && <Mapa printers={printers} />}
-            {page === "sedes" && <Sedes printers={printers} />}
+            {page === "sedes" && <Sedes printers={printers} historial={historial} />}
             {page === "alertas" && <Alertas printers={printers} />}
             {page === "historial" && <Historial historial={historial} />}
             {page === "analiticas" && <Analiticas printers={printers} historial={historial} />}
-            {page === "usuarios"   && <Usuarios data={prStats} />}
+            {page === "usuarios"   && <Usuarios data={prStats} historial={historial} />}
           </>
         )}
       </main>

@@ -58,6 +58,21 @@ export interface PrStatsUsuario { userid: string; jobs: number; pages: number; }
 export interface PrStatsDia     { fecha: string; pages: number; jobs: number; }
 export interface PrStatsSede    { site: string; pages: number; jobs: number; users: number; }
 export interface PrStatsModelo  { releasemodel: string; pages: number; jobs: number; }
+export interface PrStatsJob {
+  printjobname: string;
+  numpages: number;
+  submitdate: string;
+  finalaction: string;
+  site: string;
+  releasemodel: string;
+}
+export interface PrStatsUsuarioDetail {
+  userid: string;
+  jobs: PrStatsJob[];
+  por_dia: PrStatsDia[];
+  por_tipo: { tipo: string; jobs: number; pages: number }[];
+}
+
 export interface PrStatsData {
   exists: boolean;
   totales?: PrStatsTotales;
