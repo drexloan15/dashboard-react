@@ -1,18 +1,98 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
 import Card from "@/components/ui/Card";
 import StatPill from "@/components/ui/StatPill";
 import { SUMINISTROS } from "@/types";
 import type { Printer } from "@/types";
 import { toNum } from "@/lib/utils";
 
+const ADMIN_PIN = "1504";
+
 type SendState = "idle" | "loading" | "ok" | "error";
+
+function CheckBtn({ active, color, title, onClick, disabled }: {
+  active: boolean; color: string; title: string;
+  onClick: () => void; disabled?: boolean;
+}) {
+  return (
+    <button onClick={onClick} title={title} disabled={disabled}
+      className="w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all shrink-0"
+      style={{
+        borderColor: active ? color : disabled ? "#2a3a4a" : "#4a5568",
+        background: active ? color : "transparent",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.4 : 1,
+      }}>
+      {active && <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
+        <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>}
+    </button>
+  );
+}
+
+function PinModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: () => void }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (pin === ADMIN_PIN) {
+      onSuccess();
+    } else {
+      setError(true);
+      setPin("");
+      setTimeout(() => setError(false), 1500);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={onClose}>
+      <div className="dark:bg-dark-card bg-white rounded-2xl p-6 w-72 shadow-2xl border dark:border-dark-border border-light-border"
+        onClick={e => e.stopPropagation()}>
+        <p className="text-[13px] font-bold dark:text-dark-text text-light-text mb-1">Acceso Admin</p>
+        <p className="text-[11px] dark:text-dark-muted text-light-muted mb-4">Ingresa el PIN para editar alertas</p>
+        <form onSubmit={handleSubmit}>
+          <input
+            ref={inputRef}
+            type="password"
+            value={pin}
+            onChange={e => setPin(e.target.value)}
+            placeholder="PIN"
+            maxLength={8}
+            className={`w-full text-center text-[18px] font-bold tracking-[0.4em] px-3 py-2.5 rounded-lg border outline-none mb-3
+              dark:bg-dark-surface bg-gray-50 dark:text-dark-text text-light-text transition-colors
+              ${error ? "border-brand-red dark:border-brand-red" : "dark:border-dark-border border-light-border focus:border-brand-blue"}`}
+          />
+          {error && <p className="text-[11px] text-brand-red text-center mb-3">PIN incorrecto</p>}
+          <div className="flex gap-2">
+            <button type="button" onClick={onClose}
+              className="flex-1 py-2 rounded-lg text-[12px] font-semibold dark:bg-dark-border bg-gray-100 dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-80 transition-opacity">
+              Cancelar
+            </button>
+            <button type="submit"
+              className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-brand-blue text-white cursor-pointer hover:opacity-90 transition-opacity">
+              Entrar
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 export default function Alertas({ printers }: { printers: Printer[] }) {
   const [sendState, setSendState] = useState<SendState>("idle");
   const [sendMsg,   setSendMsg]   = useState("");
   const [filtroSede, setFiltroSede] = useState("Todas");
   const [filtroSum,  setFiltroSum]  = useState("Todos");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showPin, setShowPin] = useState(false);
+  const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
+
   const [listos, setListos] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem("alertas_listos");
@@ -20,15 +100,59 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
     } catch { return new Set(); }
   });
 
+  const [enviados, setEnviados] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem("alertas_enviados");
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch { return new Set(); }
+  });
+
   function alertKey(a: { ip: string; suministro: string }) {
     return `${a.ip}::${a.suministro}`;
   }
+
+  function requireAdmin(action: () => void) {
+    if (isAdmin) { action(); return; }
+    setPendingAction(() => action);
+    setShowPin(true);
+  }
+
+  function handlePinSuccess() {
+    setIsAdmin(true);
+    setShowPin(false);
+    if (pendingAction) { pendingAction(); setPendingAction(null); }
+  }
+
   function toggleListo(key: string) {
-    setListos(prev => {
-      const next = new Set(prev);
-      next.has(key) ? next.delete(key) : next.add(key);
-      try { localStorage.setItem("alertas_listos", JSON.stringify([...next])); } catch {}
-      return next;
+    requireAdmin(() => {
+      setListos(prev => {
+        const next = new Set(prev);
+        if (next.has(key)) {
+          next.delete(key);
+          // Al desmarcar listo, quitar también enviado
+          setEnviados(prev2 => {
+            const next2 = new Set(prev2);
+            next2.delete(key);
+            try { localStorage.setItem("alertas_enviados", JSON.stringify([...next2])); } catch {}
+            return next2;
+          });
+        } else {
+          next.add(key);
+        }
+        try { localStorage.setItem("alertas_listos", JSON.stringify([...next])); } catch {}
+        return next;
+      });
+    });
+  }
+
+  function toggleEnviado(key: string) {
+    requireAdmin(() => {
+      setEnviados(prev => {
+        const next = new Set(prev);
+        next.has(key) ? next.delete(key) : next.add(key);
+        try { localStorage.setItem("alertas_enviados", JSON.stringify([...next])); } catch {}
+        return next;
+      });
     });
   }
 
@@ -54,8 +178,8 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
     return result.sort((a, b) => a.valor - b.valor);
   }, [printers]);
 
-  const sedes   = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.sede))).sort(), [todasAlertas]);
-  const sumins  = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.suministro))).sort(), [todasAlertas]);
+  const sedes  = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.sede))).sort(), [todasAlertas]);
+  const sumins = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.suministro))).sort(), [todasAlertas]);
 
   const alertas = useMemo(() =>
     todasAlertas.filter(a =>
@@ -101,8 +225,19 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
 
   return (
     <div>
+      {showPin && <PinModal onSuccess={handlePinSuccess} onClose={() => { setShowPin(false); setPendingAction(null); }} />}
+
       <div className="flex items-start justify-between gap-4 mb-1 flex-wrap">
-        <h1 className="page-title text-2xl font-bold dark:text-dark-text text-light-text">Alertas</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="page-title text-2xl font-bold dark:text-dark-text text-light-text">Alertas</h1>
+          {isAdmin
+            ? <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-brand-blue/20 text-brand-blue uppercase tracking-wide">Admin</span>
+            : <button onClick={() => setShowPin(true)}
+                className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-black/10 dark:bg-white/5 dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-70 transition-opacity border-none">
+                🔒 Admin
+              </button>
+          }
+        </div>
         <div className="flex items-center gap-2 flex-wrap">
           <select value={filtroSede} onChange={e => setFiltroSede(e.target.value)}
             className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer">
@@ -114,26 +249,22 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
             <option value="Todos">Todos los suministros</option>
             {sumins.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <button
-          onClick={sendAlert}
-          disabled={sendState === "loading"}
-          className="page-title flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-semibold
-            bg-brand-blue text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed
-            transition-all cursor-pointer shrink-0"
-          style={{ animationDelay: "60ms" }}
-        >
-          {sendState === "loading" ? "Enviando..." : "✉ Notificar por correo"}
+          <button onClick={sendAlert} disabled={sendState === "loading"}
+            className="page-title flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-semibold
+              bg-brand-blue text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed
+              transition-all cursor-pointer shrink-0"
+            style={{ animationDelay: "60ms" }}>
+            {sendState === "loading" ? "Enviando..." : "✉ Notificar por correo"}
           </button>
         </div>
       </div>
+
       <p className="page-title text-[13px] dark:text-dark-muted text-light-muted mb-2" style={{ animationDelay: "60ms" }}>
         {alertas.length} alertas activas
       </p>
       {sendMsg && (
         <p className={`text-[12px] mb-4 px-3 py-2 rounded-lg ${
-          sendState === "error"
-            ? "text-brand-red bg-brand-red/10"
-            : "text-brand-green bg-brand-green/10"
+          sendState === "error" ? "text-brand-red bg-brand-red/10" : "text-brand-green bg-brand-green/10"
         }`}>
           {sendState === "error" ? "✕ " : "✓ "}{sendMsg}
         </p>
@@ -144,38 +275,44 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
           <StatPill value={cn} label="Críticos ≤10%" color="#f04545" />
         </Card>
         <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "120ms" }}>
-          <StatPill value={bn} label="Bajos 11-30%"  color="#e0b030" />
+          <StatPill value={bn} label="Bajos 11-30%" color="#e0b030" />
         </Card>
         <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "160ms" }}>
           <StatPill value={listos.size} label="Listos p/ envío" color="#20c97a" />
         </Card>
+        <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "200ms" }}>
+          <StatPill value={enviados.size} label="Enviados" color="#3d8ef5" />
+        </Card>
       </div>
 
       <Card className="card-enter" style={{ animationDelay: "180ms" }}>
-        <p className="text-[10px] font-bold dark:text-dark-muted text-light-muted uppercase tracking-widest mb-3">
-          Suministros en alerta
-        </p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[10px] font-bold dark:text-dark-muted text-light-muted uppercase tracking-widest">
+            Suministros en alerta
+          </p>
+          <div className="flex items-center gap-4 text-[9px] font-bold dark:text-dark-muted text-light-muted uppercase tracking-wider pr-1">
+            <span>P/E</span>
+            <span>Enviado</span>
+          </div>
+        </div>
         <div className="rounded-lg overflow-hidden dark:border-dark-border border border-light-border">
           {alertas.map((a, i) => {
-            const key = alertKey(a);
-            const listo = listos.has(key);
+            const key     = alertKey(a);
+            const listo   = listos.has(key);
+            const enviado = enviados.has(key);
+            const rowBg   = enviado ? "#3d8ef508" : listo ? "#20c97a08" : a.color + "08";
             return (
               <div key={i}
                 className="row-enter flex items-center justify-between px-4 py-3 dark:border-dark-border border-b border-light-border last:border-0 transition-colors"
-                style={{ background: listo ? "#20c97a08" : a.color + "08", animationDelay: `${200 + Math.min(i * 18, 300)}ms` }}>
+                style={{ background: rowBg, animationDelay: `${200 + Math.min(i * 18, 300)}ms` }}>
                 <div className="flex items-center gap-3 flex-wrap">
-                  {!listo && (
-                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full"
-                      style={{ background: a.color + "22", color: a.color }}>
-                      {a.nivel}
-                    </span>
-                  )}
-                  {listo && (
-                    <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-brand-green/20 text-brand-green">
-                      LISTO
-                    </span>
-                  )}
-                  <span className={`font-mono text-[12px] font-semibold ${listo ? "line-through dark:text-dark-muted text-light-muted" : "dark:text-dark-text text-light-text"}`}>
+                  {enviado
+                    ? <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-brand-blue/20 text-brand-blue">ENVIADO</span>
+                    : listo
+                      ? <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-brand-green/20 text-brand-green">LISTO</span>
+                      : <span className="text-[9px] font-bold px-2 py-0.5 rounded-full" style={{ background: a.color + "22", color: a.color }}>{a.nivel}</span>
+                  }
+                  <span className={`font-mono text-[12px] font-semibold ${enviado || listo ? "line-through dark:text-dark-muted text-light-muted" : "dark:text-dark-text text-light-text"}`}>
                     {a.ip}
                   </span>
                   <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.sede}</span>
@@ -184,18 +321,21 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   <span className="text-[11px] dark:text-dark-muted text-light-muted">{a.suministro}</span>
-                  <span className="text-[15px] font-bold" style={{ color: listo ? "#20c97a" : a.color }}>{a.valor.toFixed(0)}%</span>
-                  <button onClick={() => toggleListo(key)}
-                    title={listo ? "Desmarcar" : "Marcar como listo para envío"}
-                    className="w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all cursor-pointer shrink-0"
-                    style={{
-                      borderColor: listo ? "#20c97a" : "#4a5568",
-                      background: listo ? "#20c97a" : "transparent",
-                    }}>
-                    {listo && <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-                      <path d="M1.5 5l2.5 2.5 4.5-4.5" stroke="white" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>}
-                  </button>
+                  <span className="text-[15px] font-bold" style={{ color: enviado ? "#3d8ef5" : listo ? "#20c97a" : a.color }}>
+                    {a.valor.toFixed(0)}%
+                  </span>
+                  <CheckBtn
+                    active={listo} color="#20c97a"
+                    title={listo ? "Desmarcar listo" : "Marcar como listo para envío"}
+                    onClick={() => toggleListo(key)}
+                    disabled={!isAdmin}
+                  />
+                  <CheckBtn
+                    active={enviado} color="#3d8ef5"
+                    title={enviado ? "Desmarcar enviado" : "Marcar como enviado"}
+                    onClick={() => toggleEnviado(key)}
+                    disabled={!isAdmin || !listo}
+                  />
                 </div>
               </div>
             );

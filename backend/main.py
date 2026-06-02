@@ -238,7 +238,7 @@ def _load_pr_cache():
                 SELECT COUNT(*) AS jobs,
                        COALESCE(SUM(numpages),0) AS pages,
                        COUNT(DISTINCT userid) AS users
-                FROM pr_stats WHERE numpages > 0
+                FROM pr_stats WHERE numpages > 0 AND UPPER(finalaction) IN ('P','C')
             """)
             totales = dict(cur.fetchone())
 
@@ -246,7 +246,7 @@ def _load_pr_cache():
                 SELECT userid,
                        COUNT(*) AS jobs,
                        COALESCE(SUM(numpages),0) AS pages
-                FROM pr_stats WHERE numpages > 0 AND userid IS NOT NULL
+                FROM pr_stats WHERE numpages > 0 AND UPPER(finalaction) IN ('P','C') AND userid IS NOT NULL
                 GROUP BY userid ORDER BY pages DESC LIMIT 30
             """)
             top_usuarios = [dict(r) for r in cur.fetchall()]
@@ -256,7 +256,7 @@ def _load_pr_cache():
                        COALESCE(SUM(numpages),0) AS pages,
                        COUNT(*) AS jobs
                 FROM pr_stats
-                WHERE submitdate >= '2026-04-23' AND numpages > 0
+                WHERE submitdate >= '2026-04-23' AND numpages > 0 AND UPPER(finalaction) IN ('P','C')
                 GROUP BY DATE(submitdate)
                 ORDER BY fecha
             """)
@@ -268,7 +268,7 @@ def _load_pr_cache():
                        COALESCE(SUM(numpages),0) AS pages,
                        COUNT(*) AS jobs,
                        COUNT(DISTINCT userid) AS users
-                FROM pr_stats WHERE numpages > 0 AND site IS NOT NULL
+                FROM pr_stats WHERE numpages > 0 AND UPPER(finalaction) IN ('P','C') AND site IS NOT NULL
                 GROUP BY site ORDER BY pages DESC
             """)
             por_sede = [dict(r) for r in cur.fetchall()]
@@ -278,7 +278,7 @@ def _load_pr_cache():
                        COALESCE(SUM(numpages),0) AS pages,
                        COUNT(*) AS jobs
                 FROM pr_stats
-                WHERE numpages > 0 AND releasemodel IS NOT NULL
+                WHERE numpages > 0 AND UPPER(finalaction) IN ('P','C') AND releasemodel IS NOT NULL
                 GROUP BY releasemodel ORDER BY pages DESC LIMIT 20
             """)
             por_modelo = [dict(r) for r in cur.fetchall()]
@@ -416,13 +416,13 @@ async def get_usuario_jobs(userid: str):
             """, (userid,))
             jobs = [dict(r) for r in cur.fetchall()]
 
-            # Páginas por día
+            # Páginas por día (solo impresos y copias)
             cur.execute("""
                 SELECT DATE(submitdate) AS fecha,
                        COALESCE(SUM(numpages), 0) AS pages,
                        COUNT(*) AS jobs
                 FROM pr_stats
-                WHERE userid = %s AND numpages > 0
+                WHERE userid = %s AND numpages > 0 AND UPPER(finalaction) IN ('P','C')
                 GROUP BY DATE(submitdate)
                 ORDER BY fecha
             """, (userid,))
