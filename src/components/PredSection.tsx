@@ -24,6 +24,14 @@ function calcPreds(printers: Printer[], historial: HistorialRow[]): { preds: Pre
   const fechasUnicas = new Set(dh.map(r => r._tsD.toDateString()));
   const diasUnicos = fechasUnicas.size;
 
+  // Índice por IP para evitar O(n) filter por cada impresora
+  const byIp = new Map<string, typeof dh>();
+  for (const r of dh) {
+    if (!r.IP) continue;
+    if (!byIp.has(r.IP)) byIp.set(r.IP, []);
+    byIp.get(r.IP)!.push(r);
+  }
+
   const preds: Pred[] = [];
   const TASA_STD = 0.8; // tasa de caída diaria por defecto (%/día) cuando no hay historial
 
@@ -33,7 +41,7 @@ function calcPreds(printers: Printer[], historial: HistorialRow[]): { preds: Pre
       // Mostrar predicciones para suministros ≤ 50% para adelantarse a los críticos
       if (curr === null || curr > 50) continue;
 
-      const ipRows = dh.filter(r => r.IP === p.IP);
+      const ipRows = byIp.get(p.IP) ?? [];
       let tasa = TASA_STD;
 
       if (ipRows.length >= 2) {

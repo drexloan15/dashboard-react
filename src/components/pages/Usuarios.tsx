@@ -1,8 +1,8 @@
 "use client";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import Card from "@/components/ui/Card";
-import type { PrStatsData, HistorialRow, PrStatsUsuarioDetail } from "@/types";
-import { toNum } from "@/lib/utils";
+import type { PrStatsData } from "@/types";
+import { useUsuarioPrStats } from "@/hooks/useData";
 
 type Periodo = "dia" | "semana" | "mes" | "año";
 
@@ -42,20 +42,11 @@ function tipoColor(t: string) {
 
 // ── Vista detalle de usuario ──────────────────────────────────────────────────
 function UsuarioDetail({ userid, onBack }: { userid: string; onBack: () => void }) {
-  const [detail, setDetail] = useState<PrStatsUsuarioDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: detail, isLoading: loading } = useUsuarioPrStats(userid);
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
   const [filtroTipo, setFiltroTipo] = useState("todos");
   const [ordenar,    setOrdenar]    = useState<"fecha_desc" | "fecha_asc" | "paginas_desc" | "paginas_asc">("fecha_desc");
-
-  useEffect(() => {
-    setLoading(true);
-    fetch(`/api/py/pr_stats/usuario/${encodeURIComponent(userid)}`)
-      .then(r => { if (!r.ok) throw new Error(`${r.status}`); return r.json(); })
-      .then(d => { setDetail(d); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, [userid]);
 
   const jobsFiltrados = useMemo(() => {
     if (!detail?.jobs) return [];
@@ -242,35 +233,14 @@ function UsuarioDetail({ userid, onBack }: { userid: string; onBack: () => void 
 }
 
 // ── Vista principal ───────────────────────────────────────────────────────────
-export default function Usuarios({ data, historial = [] }: { data: PrStatsData | null; historial?: HistorialRow[] }) {
+export default function Usuarios({ data }: { data: PrStatsData | null }) {
   const [periodo, setPeriodo] = useState<Periodo>("dia");
   const [topN,    setTopN]    = useState(15);
   const [usuarioSel, setUsuarioSel] = useState<string | null>(null);
 
   const { totales, top_usuarios = [], por_dia = [], por_modelo = [] } = data?.exists ? data : {};
 
-  const por_sede = useMemo(() => {
-    const ipData: Record<string, { sede: string; min: number; max: number }> = {};
-    for (const row of historial) {
-      const ip = row.IP;
-      const sede = String(row.SEDE ?? "").trim();
-      const contador = toNum(row.CONTADOR);
-      if (!ip || !sede || contador === null) continue;
-      if (!ipData[ip]) ipData[ip] = { sede, min: contador, max: contador };
-      else {
-        if (contador < ipData[ip].min) ipData[ip].min = contador;
-        if (contador > ipData[ip].max) ipData[ip].max = contador;
-      }
-    }
-    const sedeTotals: Record<string, number> = {};
-    for (const { sede, min, max } of Object.values(ipData)) {
-      const diff = max - min;
-      if (diff > 0) sedeTotals[sede] = (sedeTotals[sede] ?? 0) + diff;
-    }
-    return Object.entries(sedeTotals)
-      .map(([site, pages]) => ({ site, pages }))
-      .sort((a, b) => b.pages - a.pages);
-  }, [historial]);
+  const por_sede = data?.por_sede ?? [];
 
   const tendencia = useMemo(() => {
     if (!por_dia.length) return [];
@@ -410,7 +380,7 @@ export default function Usuarios({ data, historial = [] }: { data: PrStatsData |
                   </thead>
                   <tbody className="divide-y dark:divide-dark-border divide-light-border">
                     {tendencia.map((d, i) => {
-                      const isPico = d.pages === Math.max(...tendencia.map(x => x.pages));
+                      const isPico = d.pages === maxTend && d.pages > 0;
                       const pct = (d.pages / maxTend) * 100;
                       return (
                         <tr key={d.label} className={`row-enter ${isPico ? "dark:bg-brand-blue/10 bg-blue-50" : ""}`}

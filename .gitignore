@@ -3,5 +3,14 @@ node_modules/
 backend/monitoreo-impresoras.json
 monitoreo-impresoras-a2198e85d49c.json
 *.json.bak
+
+# Secretos — NUNCA deben entrar a git
 .env*
-agente/
+agent/agent.env
+backend/.env
+
+# Logs generados en runtime
+backend/audit.log
+agent/*.log
+
+agent/

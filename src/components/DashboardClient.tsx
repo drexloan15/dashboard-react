@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import Sidebar from "@/components/Sidebar";
 import Overview from "@/components/pages/Overview";
 import Mapa from "@/components/pages/Mapa";
@@ -8,8 +8,9 @@ import Alertas from "@/components/pages/Alertas";
 import Historial from "@/components/pages/Historial";
 import Analiticas from "@/components/pages/Analiticas";
 import Usuarios from "@/components/pages/Usuarios";
-import { useData } from "@/hooks/useData";
-import type { Page, PrStatsData } from "@/types";
+import Solicitudes from "@/components/pages/Solicitudes";
+import { useEstadoData, useRecentHistorial, usePrStats } from "@/hooks/useData";
+import type { Page } from "@/types";
 
 export default function DashboardClient() {
   const [page, setPage] = useState<Page>("overview");
@@ -18,25 +19,27 @@ export default function DashboardClient() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const { data, isLoading, isError } = useData();
-  const [prStats, setPrStats] = useState<PrStatsData | null>(null);
+  const { data: estadoData, isLoading, isError } = useEstadoData();
 
-  useEffect(() => {
-    if (page === "usuarios" && !prStats) {
-      fetch("/api/py/pr_stats")
-        .then(r => r.json())
-        .then(d => setPrStats(d as PrStatsData))
-        .catch(() => setPrStats({ exists: false }));
-    }
-  }, [page, prStats]);
+  // Historial reciente: 30 días para overview/sedes, 365 para analíticas
+  const needsHistorial = page === "overview" || page === "sedes" || page === "analiticas";
+  const historialDays  = page === "analiticas" ? 365 : 30;
+  const { data: recentHistorialData } = useRecentHistorial(needsHistorial, historialDays);
 
-  const printers = (data?.estado ?? []).filter(p => {
-    const zonaOk = !zonas.length || !p.ZONA || zonas.includes(p.ZONA);
-    const estadoOk = !estados.length || estados.includes(p.ESTADO);
-    return zonaOk && estadoOk;
-  });
-  const historial = data?.historial ?? [];
-  const ts = data?.ts ?? "";
+  const { data: prStats } = usePrStats(page === "usuarios");
+
+  const printers = useMemo(
+    () =>
+      (estadoData?.estado ?? []).filter(p => {
+        const zonaOk   = !zonas.length  || !p.ZONA  || zonas.includes(p.ZONA);
+        const estadoOk = !estados.length || estados.includes(p.ESTADO);
+        return zonaOk && estadoOk;
+      }),
+    [estadoData?.estado, zonas, estados]
+  );
+
+  const historial = recentHistorialData?.historial ?? [];
+  const ts = estadoData?.ts ?? "";
 
   function handleSetPage(p: Page) {
     setPage(p);
@@ -46,7 +49,6 @@ export default function DashboardClient() {
   return (
     <div className="min-h-screen dark:bg-dark-bg bg-light-bg">
 
-      {/* Overlay oscuro en móvil cuando el sidebar está abierto */}
       {sidebarOpen && (
         <div
           className="fixed inset-0 bg-black/60 z-40 lg:hidden"
@@ -67,7 +69,6 @@ export default function DashboardClient() {
 
       <main className={`${isCollapsed ? "lg:ml-[70px]" : "lg:ml-[230px]"} min-h-screen px-4 sm:px-6 lg:px-9 py-5 lg:py-8 transition-all duration-300`}>
 
-        {/* Header móvil con botón hamburguesa */}
         <div className="flex items-center gap-3 mb-5 lg:hidden">
           <button
             onClick={() => setSidebarOpen(true)}
@@ -103,13 +104,14 @@ export default function DashboardClient() {
         )}
         {!isLoading && !isError && (
           <>
-            {page === "overview" && <Overview printers={printers} historial={historial} />}
-            {page === "mapa" && <Mapa printers={printers} />}
-            {page === "sedes" && <Sedes printers={printers} historial={historial} />}
-            {page === "alertas" && <Alertas printers={printers} />}
-            {page === "historial" && <Historial historial={historial} />}
-            {page === "analiticas" && <Analiticas printers={printers} historial={historial} />}
-            {page === "usuarios"   && <Usuarios data={prStats} historial={historial} />}
+            {page === "overview"   && <Overview   printers={printers} historial={historial} />}
+            {page === "mapa"       && <Mapa        printers={printers} />}
+            {page === "sedes"      && <Sedes       printers={printers} historial={historial} />}
+            {page === "alertas"    && <Alertas     printers={printers} />}
+            {page === "historial"  && <Historial   printers={printers} />}
+            {page === "analiticas" && <Analiticas  printers={printers} historial={historial} />}
+            {page === "usuarios"   && <Usuarios    data={prStats ?? null} />}
+            {page === "solicitudes" && <Solicitudes printers={printers} />}
           </>
         )}
       </main>

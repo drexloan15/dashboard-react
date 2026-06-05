@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Card from "@/components/ui/Card";
 import Badge from "@/components/ui/Badge";
 import SupplyBar from "@/components/ui/SupplyBar";
@@ -23,16 +23,14 @@ function formatTs(ts: string): string {
   return `${fecha} ${hora}`;
 }
 
-function detectCambios(ip: string, historial: HistorialRow[]): { col: string; label: string; fecha: string }[] {
-  const rows = historial
-    .filter(r => r.IP === ip && r._ts)
-    .sort((a, b) => (a._ts! > b._ts! ? 1 : -1));
+function detectCambios(rows: HistorialRow[]): { col: string; label: string; fecha: string }[] {
+  const sorted = [...rows].filter(r => r._ts).sort((a, b) => (a._ts! > b._ts! ? 1 : -1));
 
   const cambios: { col: string; label: string; fecha: string }[] = [];
   for (const [col, label] of SUMINISTROS) {
     let prev: number | null = null;
     let lastCambio: string | null = null;
-    for (const row of rows) {
+    for (const row of sorted) {
       const v = toNum(row[col]);
       if (v === null) { prev = null; continue; }
       if (prev !== null && (v > prev + 5 || v < prev - 40)) lastCambio = row._ts!;
@@ -43,9 +41,9 @@ function detectCambios(ip: string, historial: HistorialRow[]): { col: string; la
   return cambios.sort((a, b) => b.fecha.localeCompare(a.fecha));
 }
 
-function IPDetail({ p, onBack, onBackSede, sede, historial }: { p: Printer; onBack: () => void; onBackSede: () => void; sede: string; historial: HistorialRow[] }) {
+function IPDetail({ p, onBack, onBackSede, sede, historialByIp }: { p: Printer; onBack: () => void; onBackSede: () => void; sede: string; historialByIp: Map<string, HistorialRow[]> }) {
   const ec = p.ESTADO === "Online" ? "#20c97a" : "#f04545";
-  const cambios = detectCambios(p.IP, historial);
+  const cambios = detectCambios(historialByIp.get(p.IP) ?? []);
   return (
     <div>
       <div className="flex items-center gap-1 mb-5 text-[12px]">
@@ -104,7 +102,7 @@ function IPDetail({ p, onBack, onBackSede, sede, historial }: { p: Printer; onBa
   );
 }
 
-function SedeList({ printers, sede, onSelectIP, onBack, historial }: { printers: Printer[]; sede: string; onSelectIP: (ip: string) => void; onBack: () => void; historial: HistorialRow[] }) {
+function SedeList({ printers, sede, onSelectIP, onBack, historialByIp }: { printers: Printer[]; sede: string; onSelectIP: (ip: string) => void; onBack: () => void; historialByIp: Map<string, HistorialRow[]> }) {
   const zona = printers[0]?.ZONA || "";
   return (
     <div>
@@ -122,7 +120,7 @@ function SedeList({ printers, sede, onSelectIP, onBack, historial }: { printers:
             const v = toNum(p[col]);
             return v !== null ? { col, label: label.slice(0, 13), v } : null;
           }).filter(Boolean) as { col: string; label: string; v: number }[];
-          const cambiosRecientes = detectCambios(p.IP, historial).filter(c => {
+          const cambiosRecientes = detectCambios(historialByIp.get(p.IP) ?? []).filter(c => {
             const dias = (Date.now() - new Date(c.fecha).getTime()) / 86400000;
             return dias <= 30;
           }).length;
@@ -168,19 +166,30 @@ export default function Sedes({ printers, historial = [] }: { printers: Printer[
   const [sedeSel, setSedeSel] = useState<string | null>(null);
   const [ipSel, setIpSel] = useState<string | null>(null);
 
+  // Índice por IP — se computa una sola vez cuando historial cambia
+  const historialByIp = useMemo(() => {
+    const map = new Map<string, HistorialRow[]>();
+    for (const r of historial) {
+      if (!r.IP) continue;
+      if (!map.has(r.IP)) map.set(r.IP, []);
+      map.get(r.IP)!.push(r);
+    }
+    return map;
+  }, [historial]);
+
   if (!printers.length) return <p className="dark:text-dark-muted text-light-muted">Sin datos.</p>;
 
   // Detalle IP
   if (ipSel) {
     const p = printers.find(x => x.IP === ipSel);
     if (!p) return null;
-    return <IPDetail p={p} sede={sedeSel || ""} onBack={() => setIpSel(null)} onBackSede={() => { setIpSel(null); setSedeSel(null); }} historial={historial} />;
+    return <IPDetail p={p} sede={sedeSel || ""} onBack={() => setIpSel(null)} onBackSede={() => { setIpSel(null); setSedeSel(null); }} historialByIp={historialByIp} />;
   }
 
   // Lista IPs de sede
   if (sedeSel) {
     const df_s = printers.filter(p => p.SEDE === sedeSel);
-    return <SedeList printers={df_s} sede={sedeSel} onSelectIP={setIpSel} onBack={() => setSedeSel(null)} historial={historial} />;
+    return <SedeList printers={df_s} sede={sedeSel} onSelectIP={setIpSel} onBack={() => setSedeSel(null)} historialByIp={historialByIp} />;
   }
 
   // Grid sedes

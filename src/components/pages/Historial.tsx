@@ -1,7 +1,8 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useDeferredValue } from "react";
 import Card from "@/components/ui/Card";
-import type { HistorialRow } from "@/types";
+import { useHistorialPage } from "@/hooks/useData";
+import type { Printer } from "@/types";
 
 const ALL_COLS = [
   "TIMESTAMP", "FECHA", "IP", "SEDE", "ESTADO", "CONTADOR",
@@ -19,13 +20,7 @@ const LABEL: Record<string, string> = {
   CONTENEDOR_DESECHO: "Contenedor",
 };
 
-const PAGE_SIZE = 30;
-
-function uniq(arr: string[]) {
-  return Array.from(new Set(arr.filter(Boolean))).sort();
-}
-
-export default function Historial({ historial }: { historial: HistorialRow[] }) {
+export default function Historial({ printers }: { printers: Printer[] }) {
   const [search, setSearch]       = useState("");
   const [filterSede, setSede]     = useState("");
   const [filterEstado, setEstado] = useState("");
@@ -33,46 +28,34 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
   const [filterFecha, setFecha]   = useState("");
   const [page, setPage]           = useState(0);
 
-  const sedes  = useMemo(() => uniq(historial.map(r => String(r.SEDE ?? ""))), [historial]);
-  const ips    = useMemo(() => {
-    const list = filterSede ? historial.filter(r => String(r.SEDE ?? "") === filterSede) : historial;
-    return uniq(list.map(r => String(r.IP ?? "")));
-  }, [historial, filterSede]);
-  const fechas = useMemo(() => uniq(historial.map(r => String(r.FECHA ?? (r._fecha ?? "")))), [historial]);
+  const deferredSearch = useDeferredValue(search);
 
-  const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return historial.filter(r => {
-      if (filterSede   && String(r.SEDE  ?? "") !== filterSede)                    return false;
-      if (filterEstado && String(r.ESTADO ?? "").toLowerCase() !== filterEstado)   return false;
-      if (filterIP     && String(r.IP    ?? "") !== filterIP)                       return false;
-      if (filterFecha  && String(r.FECHA ?? (r._fecha ?? "")) !== filterFecha)     return false;
-      if (q && !ALL_COLS.some(c => String(r[c] ?? "").toLowerCase().includes(q))) return false;
-      return true;
-    });
-  }, [historial, search, filterSede, filterEstado, filterIP, filterFecha]);
+  const sedes = useMemo(
+    () => Array.from(new Set(printers.map(p => p.SEDE).filter(Boolean))).sort(),
+    [printers]
+  );
+  const ips = useMemo(() => {
+    const list = filterSede ? printers.filter(p => p.SEDE === filterSede) : printers;
+    return Array.from(new Set(list.map(p => p.IP))).sort();
+  }, [printers, filterSede]);
 
-  const nDias = useMemo(() => {
-    const ts = historial.map(r => new Date(r._ts || r.TIMESTAMP || r.FECHA || "")).filter(d => !isNaN(d.getTime()));
-    if (!ts.length) return 0;
-    const min = Math.min(...ts.map(d => d.getTime()));
-    const max = Math.max(...ts.map(d => d.getTime()));
-    return Math.ceil((max - min) / 86400000) + 1;
-  }, [historial]);
+  const params = useMemo(() => {
+    const p = new URLSearchParams({ page: String(page + 1), page_size: "50" });
+    if (deferredSearch) p.set("search", deferredSearch);
+    if (filterSede)     p.set("sede",   filterSede);
+    if (filterEstado)   p.set("estado", filterEstado);
+    if (filterIP)       p.set("ip",     filterIP);
+    if (filterFecha)    p.set("fecha",  filterFecha);
+    return p;
+  }, [page, deferredSearch, filterSede, filterEstado, filterIP, filterFecha]);
 
-  const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
-  const rows       = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const { data, isLoading } = useHistorialPage(params);
+
+  const rows       = data?.items       ?? [];
+  const total      = data?.total       ?? 0;
+  const totalPages = data?.total_pages ?? 1;
 
   function resetPage() { setPage(0); }
-
-  if (!historial.length) {
-    return (
-      <div>
-        <h1 className="text-2xl font-bold mb-6 dark:text-dark-text text-light-text">Historial</h1>
-        <p className="dark:text-dark-muted text-light-muted">Sin historial. Esperando datos.</p>
-      </div>
-    );
-  }
 
   const selectCls = `px-2 py-1.5 rounded-lg text-[12px] dark:bg-dark-surface dark:border-dark-border
     dark:text-dark-text bg-gray-50 border border-light-border text-light-text outline-none`;
@@ -81,7 +64,7 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
     <div>
       <h1 className="page-title text-2xl font-bold mb-1 dark:text-dark-text text-light-text">Historial</h1>
       <p className="page-title text-[13px] dark:text-dark-muted text-light-muted mb-6" style={{ animationDelay: "50ms" }}>
-        {historial.length} registros · {nDias} días · ~24 lecturas/día/IP
+        {total > 0 ? `${total.toLocaleString()} registros en base de datos` : "Cargando…"}
       </p>
 
       <Card className="card-enter" style={{ animationDelay: "100ms" }}>
@@ -105,10 +88,11 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
             <option value="online">Online</option>
             <option value="offline">Offline</option>
           </select>
-          <select value={filterFecha} onChange={e => { setFecha(e.target.value); resetPage(); }} className={selectCls}>
-            <option value="">Todas las fechas</option>
-            {fechas.map(f => <option key={f} value={f}>{f}</option>)}
-          </select>
+          <input
+            type="date" value={filterFecha}
+            onChange={e => { setFecha(e.target.value); resetPage(); }}
+            className={selectCls}
+          />
           {(search || filterSede || filterIP || filterEstado || filterFecha) && (
             <button
               onClick={() => { setSearch(""); setSede(""); setIP(""); setEstado(""); setFecha(""); resetPage(); }}
@@ -119,7 +103,7 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
         </div>
 
         {/* Tabla */}
-        <div className="overflow-x-auto rounded-lg dark:border-dark-border border border-light-border">
+        <div className={`overflow-x-auto rounded-lg dark:border-dark-border border border-light-border transition-opacity ${isLoading ? "opacity-50" : ""}`}>
           <table className="w-full text-[11px]">
             <thead>
               <tr className="dark:bg-dark-surface bg-gray-50 dark:border-dark-border border-b border-light-border">
@@ -149,6 +133,13 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
                   })}
                 </tr>
               ))}
+              {!isLoading && rows.length === 0 && (
+                <tr>
+                  <td colSpan={ALL_COLS.length} className="px-3 py-8 text-center dark:text-dark-muted text-light-muted text-[12px]">
+                    Sin registros para los filtros actuales.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -156,8 +147,7 @@ export default function Historial({ historial }: { historial: HistorialRow[] }) 
         {/* Paginación */}
         <div className="flex items-center justify-between mt-4">
           <span className="text-[11px] dark:text-dark-muted text-light-muted">
-            {filtered.length} resultado{filtered.length !== 1 ? "s" : ""}
-            {filtered.length !== historial.length && ` (de ${historial.length})`}
+            {total.toLocaleString()} resultado{total !== 1 ? "s" : ""}
           </span>
           <div className="flex items-center gap-2">
             <button disabled={page === 0} onClick={() => setPage(p => p - 1)}

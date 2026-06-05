@@ -90,52 +90,49 @@ export default function Overview({ printers, historial }: Props) {
   const [sedeScale, setSedeScale] = useState<"auto" | "log">("auto");
   const total = printers.length;
 
-  // Métricas de suministros
-  let totalCrit = 0, totalBajo = 0, totalReadings = 0, okReadings = 0;
-  const tiposAfectados = new Set<string>();
-  for (const [col, label] of SUMINISTROS) {
-    const vals = printers.map(p => toNum(p[col])).filter(v => v !== null) as number[];
-    totalReadings += vals.length;
-    okReadings += vals.filter(v => v > 30).length;
-    const c = vals.filter(v => v <= 10).length;
-    const b = vals.filter(v => v > 10 && v <= 30).length;
-    if (c + b > 0) tiposAfectados.add(label);
-    totalCrit += c;
-    totalBajo += b;
-  }
-  const saludGlobal = totalReadings ? Math.round(okReadings / totalReadings * 100) : 0;
+  // Un único scan de SUMINISTROS produce KPIs + cards de promedio
+  const supplyMetrics = useMemo(() => {
+    let totalCrit = 0, totalBajo = 0, totalReadings = 0, okReadings = 0;
+    const tiposAfectados = new Set<string>();
+    const cards: { label: string; avg: number; crit: number; bajo: number; color: string }[] = [];
+
+    for (const [col, label] of SUMINISTROS) {
+      const vals = printers.map(p => toNum(p[col])).filter(v => v !== null) as number[];
+      if (!vals.length) continue;
+      totalReadings += vals.length;
+      okReadings += vals.filter(v => v > 30).length;
+      const crit = vals.filter(v => v <= 10).length;
+      const bajo = vals.filter(v => v > 10 && v <= 30).length;
+      if (crit + bajo > 0) tiposAfectados.add(label);
+      totalCrit += crit;
+      totalBajo += bajo;
+      const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+      cards.push({ label, avg, crit, bajo, color: nivelColor(avg, "dark") });
+    }
+
+    const saludGlobal = totalReadings ? Math.round(okReadings / totalReadings * 100) : 0;
+    return { totalCrit, totalBajo, tiposAfectados, saludGlobal, supplyCards: cards };
+  }, [printers]);
+
+  const { totalCrit, totalBajo, tiposAfectados, saludGlobal, supplyCards } = supplyMetrics;
   const gaugeColor = saludGlobal >= 80 ? "#20c97a" : saludGlobal >= 50 ? "#e0b030" : "#f04545";
 
-  // Equipos por sede
-  const sedeMap: Record<string, { on: number; off: number }> = {};
-  for (const p of printers) {
-    const s = p.SEDE || "?";
-    if (!sedeMap[s]) sedeMap[s] = { on: 0, off: 0 };
-    p.ESTADO === "Online" ? sedeMap[s].on++ : sedeMap[s].off++;
-  }
-  const sedeData = Object.entries(sedeMap).map(([sede, v]) => ({ sede, ...v }));
-
-  // Top 15 tóner negro más críticos
-  const tonerData = printers
-    .map(p => ({
-      ip: p.IP,
-      v: toNum(p.TONER_NEGRO),
-      sede: p.SEDE || "Desconocida",
-      area: p.AREA || p.ZONA || "Sin área",
-    }))
-    .filter(x => x.v !== null)
-    .sort((a, b) => (a.v as number) - (b.v as number))
-    .slice(0, 15);
-
-  // Suministros promedio (mini cards)
-  const supplyCards = SUMINISTROS.map(([col, label]) => {
-    const vals = printers.map(p => toNum(p[col])).filter(v => v !== null) as number[];
-    if (!vals.length) return null;
-    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-    const crit = vals.filter(v => v <= 10).length;
-    const bajo = vals.filter(v => v > 10 && v <= 30).length;
-    return { label, avg, crit, bajo, color: nivelColor(avg, "dark") };
-  }).filter(Boolean);
+  // Equipos por sede + top tóner — un único scan sobre printers
+  const { sedeData, tonerData } = useMemo(() => {
+    const sedeMap: Record<string, { on: number; off: number }> = {};
+    for (const p of printers) {
+      const s = p.SEDE || "?";
+      if (!sedeMap[s]) sedeMap[s] = { on: 0, off: 0 };
+      p.ESTADO === "Online" ? sedeMap[s].on++ : sedeMap[s].off++;
+    }
+    const sedeData = Object.entries(sedeMap).map(([sede, v]) => ({ sede, ...v }));
+    const tonerData = printers
+      .map(p => ({ ip: p.IP, v: toNum(p.TONER_NEGRO), sede: p.SEDE || "Desconocida", area: p.AREA || p.ZONA || "Sin área" }))
+      .filter(x => x.v !== null)
+      .sort((a, b) => (a.v as number) - (b.v as number))
+      .slice(0, 15);
+    return { sedeData, tonerData };
+  }, [printers]);
 
   // Calcular tendencias de los últimos 7 días
   const trends = useMemo(() => {

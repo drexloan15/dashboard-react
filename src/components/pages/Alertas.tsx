@@ -1,12 +1,12 @@
 "use client";
 import { useState, useMemo, useRef, useEffect } from "react";
+import axios from "axios";
 import Card from "@/components/ui/Card";
 import StatPill from "@/components/ui/StatPill";
 import { SUMINISTROS } from "@/types";
 import type { Printer } from "@/types";
 import { toNum } from "@/lib/utils";
-
-const ADMIN_PIN = "1504";
+import { useAlertasStatus, useAlertasMutation, useVerifyPin } from "@/hooks/useData";
 
 type SendState = "idle" | "loading" | "ok" | "error";
 
@@ -30,82 +30,159 @@ function CheckBtn({ active, color, title, onClick, disabled }: {
   );
 }
 
-function PinModal({ onSuccess, onClose }: { onSuccess: () => void; onClose: () => void }) {
-  const [pin, setPin] = useState("");
+function PinModal({ lockout, maxLockout, onRateLimited, onSuccess, onClose }: {
+  lockout:       number;
+  maxLockout:    number;
+  onRateLimited: (secs: number) => void;
+  onSuccess:     () => void;
+  onClose:       () => void;
+}) {
+  const [pin, setPin]     = useState("");
   const [error, setError] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef          = useRef<HTMLInputElement>(null);
+  const verifyPin         = useVerifyPin();
+  const isPending         = verifyPin.isPending;
+  const isLocked          = lockout > 0;
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  // Foco automático al montar y cuando se libera el bloqueo
+  useEffect(() => {
+    if (!isLocked) inputRef.current?.focus();
+  }, [isLocked]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault();
-    if (pin === ADMIN_PIN) {
-      onSuccess();
-    } else {
-      setError(true);
-      setPin("");
-      setTimeout(() => setError(false), 1500);
+    if (isLocked || isPending) return;
+    try {
+      const ok = await verifyPin.mutateAsync(pin);
+      if (ok) {
+        onSuccess();
+      } else {
+        setError(true);
+        setPin("");
+        setTimeout(() => setError(false), 1500);
+      }
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 429) {
+        const detail = err.response.data?.detail;
+        const secs = typeof detail === "object" && detail?.retry_after
+          ? Number(detail.retry_after)
+          : 30;
+        onRateLimited(secs);   // lockout se gestiona en el padre
+        setPin("");
+      } else {
+        setError(true);
+        setPin("");
+        setTimeout(() => setError(false), 1500);
+      }
     }
   }
+
+  const pct = maxLockout > 0 ? (lockout / maxLockout) * 100 : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}>
       <div className="dark:bg-dark-card bg-white rounded-2xl p-6 w-72 shadow-2xl border dark:border-dark-border border-light-border"
         onClick={e => e.stopPropagation()}>
+
         <p className="text-[13px] font-bold dark:text-dark-text text-light-text mb-1">Acceso Admin</p>
-        <p className="text-[11px] dark:text-dark-muted text-light-muted mb-4">Ingresa el PIN para editar alertas</p>
-        <form onSubmit={handleSubmit}>
-          <input
-            ref={inputRef}
-            type="password"
-            value={pin}
-            onChange={e => setPin(e.target.value)}
-            placeholder="PIN"
-            maxLength={8}
-            className={`w-full text-center text-[18px] font-bold tracking-[0.4em] px-3 py-2.5 rounded-lg border outline-none mb-3
-              dark:bg-dark-surface bg-gray-50 dark:text-dark-text text-light-text transition-colors
-              ${error ? "border-brand-red dark:border-brand-red" : "dark:border-dark-border border-light-border focus:border-brand-blue"}`}
-          />
-          {error && <p className="text-[11px] text-brand-red text-center mb-3">PIN incorrecto</p>}
-          <div className="flex gap-2">
-            <button type="button" onClick={onClose}
-              className="flex-1 py-2 rounded-lg text-[12px] font-semibold dark:bg-dark-border bg-gray-100 dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-80 transition-opacity">
-              Cancelar
-            </button>
-            <button type="submit"
-              className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-brand-blue text-white cursor-pointer hover:opacity-90 transition-opacity">
-              Entrar
-            </button>
+        <p className="text-[11px] dark:text-dark-muted text-light-muted mb-4">
+          Ingresa el PIN para editar alertas
+        </p>
+
+        {isLocked ? (
+          /* ── Estado bloqueado ── */
+          <div className="text-center py-2 mb-1">
+            <div className="text-[52px] font-black tabular-nums leading-none text-brand-red mb-2">
+              {lockout}s
+            </div>
+            <p className="text-[11px] dark:text-dark-muted text-light-muted leading-relaxed">
+              Demasiados intentos fallidos.<br />Espera antes de volver a intentarlo.
+            </p>
+            <div className="mt-4 h-1.5 dark:bg-dark-border bg-gray-200 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-brand-red rounded-full transition-[width] duration-1000 ease-linear"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
           </div>
-        </form>
+        ) : (
+          /* ── Formulario normal ── */
+          <form onSubmit={handleSubmit as (e: React.FormEvent) => void}>
+            <input
+              ref={inputRef}
+              type="password"
+              value={pin}
+              onChange={e => setPin(e.target.value)}
+              placeholder="PIN"
+              maxLength={8}
+              disabled={isPending}
+              className={`w-full text-center text-[18px] font-bold tracking-[0.4em] px-3 py-2.5 rounded-lg border outline-none mb-3
+                dark:bg-dark-surface bg-gray-50 dark:text-dark-text text-light-text transition-colors
+                ${error
+                  ? "border-brand-red dark:border-brand-red"
+                  : "dark:border-dark-border border-light-border focus:border-brand-blue"
+                }`}
+            />
+            {error && (
+              <p className="text-[11px] text-brand-red text-center mb-3">PIN incorrecto</p>
+            )}
+            <div className="flex gap-2">
+              <button type="button" onClick={onClose}
+                className="flex-1 py-2 rounded-lg text-[12px] font-semibold dark:bg-dark-border bg-gray-100 dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-80 transition-opacity">
+                Cancelar
+              </button>
+              <button type="submit" disabled={isPending}
+                className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-brand-blue text-white cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-60">
+                {isPending ? "..." : "Entrar"}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {isLocked && (
+          <button onClick={onClose}
+            className="w-full mt-3 py-2 rounded-lg text-[12px] font-semibold dark:bg-dark-border bg-gray-100 dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-80 transition-opacity">
+            Cerrar
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 export default function Alertas({ printers }: { printers: Printer[] }) {
-  const [sendState, setSendState] = useState<SendState>("idle");
-  const [sendMsg,   setSendMsg]   = useState("");
-  const [filtroSede, setFiltroSede] = useState("Todas");
-  const [filtroSum,  setFiltroSum]  = useState("Todos");
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [showPin, setShowPin] = useState(false);
+  const [sendState, setSendState]     = useState<SendState>("idle");
+  const [sendMsg,   setSendMsg]       = useState("");
+  const [filtroSede, setFiltroSede]   = useState("Todas");
+  const [filtroSum,  setFiltroSum]    = useState("Todos");
+  const [showPin, setShowPin]         = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
-  const [listos, setListos] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem("alertas_listos");
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch { return new Set(); }
+  // lockout vive en el padre para que persista aunque el modal se cierre y reabra
+  const [lockout, setLockout]   = useState(0);
+  const maxLockoutRef           = useRef(0);
+
+  // Countdown corre siempre, incluso con el modal cerrado
+  useEffect(() => {
+    if (lockout <= 0) return;
+    const id = setTimeout(() => setLockout(s => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(id);
+  }, [lockout]);
+
+  function handleRateLimited(secs: number) {
+    maxLockoutRef.current = secs;
+    setLockout(secs);
+  }
+
+  // Sesión admin en sessionStorage: persiste durante la sesión del navegador,
+  // se pierde al cerrar la pestaña. No reemplaza autenticación real.
+  const [isAdmin, setIsAdmin] = useState(() => {
+    try { return sessionStorage.getItem("admin_session") === "true"; } catch { return false; }
   });
 
-  const [enviados, setEnviados] = useState<Set<string>>(() => {
-    try {
-      const saved = localStorage.getItem("alertas_enviados");
-      return saved ? new Set(JSON.parse(saved)) : new Set();
-    } catch { return new Set(); }
-  });
+  const { data: statusData = {}, isLoading: statusLoading } = useAlertasStatus();
+  const mutation = useAlertasMutation();
 
   function alertKey(a: { ip: string; suministro: string }) {
     return `${a.ip}::${a.suministro}`;
@@ -119,40 +196,37 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
 
   function handlePinSuccess() {
     setIsAdmin(true);
+    try { sessionStorage.setItem("admin_session", "true"); } catch {}
     setShowPin(false);
     if (pendingAction) { pendingAction(); setPendingAction(null); }
   }
 
+  function logoutAdmin() {
+    setIsAdmin(false);
+    try { sessionStorage.removeItem("admin_session"); } catch {}
+  }
+
   function toggleListo(key: string) {
     requireAdmin(() => {
-      setListos(prev => {
-        const next = new Set(prev);
-        if (next.has(key)) {
-          next.delete(key);
-          // Al desmarcar listo, quitar también enviado
-          setEnviados(prev2 => {
-            const next2 = new Set(prev2);
-            next2.delete(key);
-            try { localStorage.setItem("alertas_enviados", JSON.stringify([...next2])); } catch {}
-            return next2;
-          });
-        } else {
-          next.add(key);
-        }
-        try { localStorage.setItem("alertas_listos", JSON.stringify([...next])); } catch {}
-        return next;
-      });
+      const current = statusData[key];
+      if (current === "listo" || current === "enviado") {
+        // desmarcar: elimina el estado
+        mutation.mutate({ key, estado: null });
+      } else {
+        mutation.mutate({ key, estado: "listo" });
+      }
     });
   }
 
   function toggleEnviado(key: string) {
     requireAdmin(() => {
-      setEnviados(prev => {
-        const next = new Set(prev);
-        next.has(key) ? next.delete(key) : next.add(key);
-        try { localStorage.setItem("alertas_enviados", JSON.stringify([...next])); } catch {}
-        return next;
-      });
+      const current = statusData[key];
+      if (current === "enviado") {
+        // volver a "listo"
+        mutation.mutate({ key, estado: "listo" });
+      } else if (current === "listo") {
+        mutation.mutate({ key, estado: "enviado" });
+      }
     });
   }
 
@@ -190,6 +264,10 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
   const cn = alertas.filter(a => a.nivel === "CRÍTICO").length;
   const bn = alertas.filter(a => a.nivel === "BAJO").length;
 
+  // Conteos globales desde el estado compartido
+  const listosCount   = Object.values(statusData).filter(v => v === "listo").length;
+  const enviadosCount = Object.values(statusData).filter(v => v === "enviado").length;
+
   async function sendAlert() {
     setSendState("loading");
     setSendMsg("");
@@ -225,18 +303,33 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
 
   return (
     <div>
-      {showPin && <PinModal onSuccess={handlePinSuccess} onClose={() => { setShowPin(false); setPendingAction(null); }} />}
+      {showPin && (
+        <PinModal
+          lockout={lockout}
+          maxLockout={maxLockoutRef.current}
+          onRateLimited={handleRateLimited}
+          onSuccess={handlePinSuccess}
+          onClose={() => { setShowPin(false); setPendingAction(null); }}
+        />
+      )}
 
       <div className="flex items-start justify-between gap-4 mb-1 flex-wrap">
         <div className="flex items-center gap-3">
           <h1 className="page-title text-2xl font-bold dark:text-dark-text text-light-text">Alertas</h1>
-          {isAdmin
-            ? <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-brand-blue/20 text-brand-blue uppercase tracking-wide">Admin</span>
-            : <button onClick={() => setShowPin(true)}
-                className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-black/10 dark:bg-white/5 dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-70 transition-opacity border-none">
-                🔒 Admin
+          {isAdmin ? (
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-brand-blue/20 text-brand-blue uppercase tracking-wide">Admin</span>
+              <button onClick={logoutAdmin}
+                className="text-[9px] font-bold px-1.5 py-0.5 rounded-full dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-70 transition-opacity border-none bg-transparent">
+                ✕
               </button>
-          }
+            </div>
+          ) : (
+            <button onClick={() => setShowPin(true)}
+              className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-black/10 dark:bg-white/5 dark:text-dark-muted text-light-muted cursor-pointer hover:opacity-70 transition-opacity border-none">
+              🔒 Admin
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <select value={filtroSede} onChange={e => setFiltroSede(e.target.value)}
@@ -278,10 +371,10 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
           <StatPill value={bn} label="Bajos 11-30%" color="#e0b030" />
         </Card>
         <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "160ms" }}>
-          <StatPill value={listos.size} label="Listos p/ envío" color="#20c97a" />
+          <StatPill value={statusLoading ? "—" : listosCount} label="Listos p/ envío" color="#20c97a" />
         </Card>
         <Card className="flex-1 flex justify-center stat-enter" style={{ animationDelay: "200ms" }}>
-          <StatPill value={enviados.size} label="Enviados" color="#3d8ef5" />
+          <StatPill value={statusLoading ? "—" : enviadosCount} label="Enviados" color="#3d8ef5" />
         </Card>
       </div>
 
@@ -298,8 +391,9 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
         <div className="rounded-lg overflow-hidden dark:border-dark-border border border-light-border">
           {alertas.map((a, i) => {
             const key     = alertKey(a);
-            const listo   = listos.has(key);
-            const enviado = enviados.has(key);
+            const estado  = statusData[key] ?? null;
+            const listo   = estado === "listo" || estado === "enviado";
+            const enviado = estado === "enviado";
             const rowBg   = enviado ? "#3d8ef508" : listo ? "#20c97a08" : a.color + "08";
             return (
               <div key={i}
@@ -324,18 +418,27 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
                   <span className="text-[15px] font-bold" style={{ color: enviado ? "#3d8ef5" : listo ? "#20c97a" : a.color }}>
                     {a.valor.toFixed(0)}%
                   </span>
-                  <CheckBtn
-                    active={listo} color="#20c97a"
-                    title={listo ? "Desmarcar listo" : "Marcar como listo para envío"}
-                    onClick={() => toggleListo(key)}
-                    disabled={!isAdmin}
-                  />
-                  <CheckBtn
-                    active={enviado} color="#3d8ef5"
-                    title={enviado ? "Desmarcar enviado" : "Marcar como enviado"}
-                    onClick={() => toggleEnviado(key)}
-                    disabled={!isAdmin || !listo}
-                  />
+                  {statusLoading ? (
+                    <>
+                      <div className="w-6 h-6 rounded-full dark:bg-dark-border bg-gray-200 animate-pulse shrink-0" />
+                      <div className="w-6 h-6 rounded-full dark:bg-dark-border bg-gray-200 animate-pulse shrink-0" />
+                    </>
+                  ) : (
+                    <>
+                      <CheckBtn
+                        active={listo} color="#20c97a"
+                        title={listo ? "Desmarcar listo" : "Marcar como listo para envío"}
+                        onClick={() => toggleListo(key)}
+                        disabled={!isAdmin}
+                      />
+                      <CheckBtn
+                        active={enviado} color="#3d8ef5"
+                        title={enviado ? "Desmarcar enviado" : "Marcar como enviado"}
+                        onClick={() => toggleEnviado(key)}
+                        disabled={!isAdmin || !listo}
+                      />
+                    </>
+                  )}
                 </div>
               </div>
             );

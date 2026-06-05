@@ -9,7 +9,8 @@ const NAV: { id: Page; icon: string; label: string }[] = [
   { id: "alertas", icon: "⊗", label: "Alertas" },
   { id: "historial", icon: "☰", label: "Historial" },
   { id: "analiticas", icon: "◈", label: "Analíticas" },
-  { id: "usuarios",   icon: "◉", label: "Usuarios" },
+  { id: "usuarios",    icon: "◉", label: "Usuarios" },
+  { id: "solicitudes", icon: "◫", label: "Solicitudes" },
 ];
 
 interface Props {

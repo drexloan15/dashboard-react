@@ -51,7 +51,20 @@ export interface DashData {
   ts: string;
 }
 
-export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial" | "analiticas" | "usuarios";
+export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial" | "analiticas" | "usuarios" | "solicitudes";
+
+export interface SolicitudSuministro {
+  id:            number;
+  printer_ip:    string;
+  sede?:         string;
+  area?:         string;
+  modelo?:       string;
+  suministros:   string[];
+  to_email:      string;
+  notas?:        string;
+  reportado_por: string;
+  created_at:    string;
+}
 
 export interface PrStatsTotales { jobs: number; pages: number; users: number; }
 export interface PrStatsUsuario { userid: string; jobs: number; pages: number; }
@@ -82,6 +95,9 @@ export interface PrStatsData {
   por_modelo?: PrStatsModelo[];
   ts?: string;
 }
+
+export type AlertaEstado = "listo" | "enviado";
+export type AlertasStatusMap = Record<string, AlertaEstado>;
 
 export const SUMINISTROS: [string, string][] = [
   ["TONER_NEGRO",       "Tóner Negro"],
