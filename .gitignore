@@ -8,9 +8,14 @@ monitoreo-impresoras-a2198e85d49c.json
 .env*
 agent/agent.env
 backend/.env
+backend/.audit.log
 
 # Logs generados en runtime
 backend/audit.log
 agent/*.log
 
 agent/
+
+# Build artifacts
+tsconfig.tsbuildinfo
+*.tsbuildinfo
