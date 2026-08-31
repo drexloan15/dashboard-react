@@ -12,3 +12,7 @@ firebird-driver>=1.10
 # Para empaquetar como .exe (no es dependencia de runtime):
 #   pip install pyinstaller
 #   pyinstaller --onefile pr_stats_agent.py
+#
+# api_url.py debe estar en la misma carpeta al compilar (PyInstaller lo
+# incluye solo por seguir el import).
+# La URL del tunel sale de C:\imp\url.txt.

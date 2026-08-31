@@ -5,6 +5,12 @@ requests==2.34.2
 pandas==3.0.3
 puresnmp==2.0.1
 
-# Para empaquetar como .exe (no es dependencia de runtime):
+# Para empaquetar como .exe (no es dependencia de runtime). En Red A no hay
+# Python, asi que el agente SIEMPRE va empaquetado:
 #   pip install pyinstaller
 #   pyinstaller --onefile agente_lexmark.py
+#
+# api_url.py debe estar en la misma carpeta al compilar -- PyInstaller lo
+# incluye solo por seguir el import, no hay que listarlo aparte.
+# Junto al .exe en la maquina destino: agent.env, inventario2026.csv
+# La URL del tunel sale de C:\imp\url.txt (ver agent.env.example).
