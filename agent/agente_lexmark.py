@@ -4,6 +4,8 @@ Consulta impresoras via SNMP y envía los datos a la API REST en Red B.
 Fuente de verdad: inventario2026.csv (debe estar junto al .exe)
 """
 
+import gzip
+import json
 import os
 import sys
 import time
@@ -87,6 +89,12 @@ if not API_KEY:
     sys.exit(1)
 
 API_TIMEOUT      = int(os.environ.get("API_TIMEOUT", "60"))
+# (conectar, leer) por separado: el enlace de Red A a veces no deja ni abrir
+# la conexion, y con un solo valor eso quemaba los 60 s enteros antes de
+# rendirse. Asi falla a los 15 y queda tiempo para reintentar.
+CONNECT_TIMEOUT  = int(os.environ.get("CONNECT_TIMEOUT", "15"))
+REINTENTOS       = int(os.environ.get("REINTENTOS",  "3"))
+ESPERA_BASE      = int(os.environ.get("ESPERA_BASE", "4"))   # segundos, se duplica
 SNMP_MAX_WORKERS = int(os.environ.get("SNMP_MAX_WORKERS", "20"))
 SNMP_TIMEOUT     = float(os.environ.get("SNMP_TIMEOUT", "2.0"))
 SNMP_COMMUNITY   = os.environ.get("SNMP_COMMUNITY", "public")
@@ -111,6 +119,12 @@ COLUMNAS = [
 # ─────────────────────────────────────────────
 # SNMP
 # ─────────────────────────────────────────────
+# Una sola sesion para el ciclo entero: el inventario y los dos envios
+# comparten la conexion TCP/TLS en vez de rehacer el handshake tres veces.
+# Sobre el enlace de Red A ese handshake es justo lo que caducaba.
+_sesion = requests.Session()
+
+
 def snmp_get(ip, oid, timeout=None):
     return get(ip, SNMP_COMMUNITY, oid, timeout=timeout or SNMP_TIMEOUT)
 
@@ -184,17 +198,50 @@ def consultar_impresora(row):
 # API REST
 # ─────────────────────────────────────────────
 def enviar(endpoint: str, filas: list):
+    """Envia comprimido y con reintentos.
+
+    Antes, un tropiezo de red perdia el envio entero: el historial de ese
+    ciclo no se recuperaba nunca, porque el siguiente ciclo manda la hora
+    siguiente. Ahora reintenta con espera creciente.
+    """
     url = f"{API_URL}/{endpoint}"
-    resp = requests.post(
-        url,
-        json={"filas": filas},
-        headers={"x-api-key": API_KEY},
-        timeout=API_TIMEOUT
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    log.info(f"{endpoint}: {data.get('filas', '?')} filas enviadas.")
-    return data
+    cuerpo = gzip.compress(json.dumps({"filas": filas}).encode("utf-8"), 6)
+
+    for intento in range(1, REINTENTOS + 1):
+        try:
+            resp = _sesion.post(
+                url,
+                data=cuerpo,
+                headers={
+                    "x-api-key": API_KEY,
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                timeout=(CONNECT_TIMEOUT, API_TIMEOUT),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            log.info(f"{endpoint}: {data.get('filas', '?')} filas enviadas.")
+            return data
+        except requests.exceptions.HTTPError as e:
+            codigo = e.response.status_code if e.response is not None else 0
+            if 400 <= codigo < 500:
+                detalle = e.response.text[:300] if e.response is not None else ""
+                log.error(f"{endpoint}: el servidor rechazo los datos "
+                          f"(HTTP {codigo}): {detalle}")
+                return None
+            motivo = f"HTTP {codigo}"
+        except requests.exceptions.RequestException as e:
+            motivo = type(e).__name__
+
+        if intento < REINTENTOS:
+            espera = ESPERA_BASE * (2 ** (intento - 1))
+            log.warning(f"{endpoint}: envio fallido ({motivo}), "
+                        f"intento {intento}/{REINTENTOS}. Reintentando en {espera}s...")
+            time.sleep(espera)
+        else:
+            log.error(f"{endpoint}: envio fallido ({motivo}) tras {REINTENTOS} intentos.")
+    return None
 
 # ─────────────────────────────────────────────
 # MAIN
@@ -206,15 +253,28 @@ def descargar_inventario() -> bool:
     deja el CSV que ya estaba: es preferible monitorear con un inventario de
     ayer que no monitorear nada.
     """
-    try:
-        resp = requests.get(
-            f"{API_URL}/inventario",
-            headers={"x-api-key": API_KEY},
-            timeout=API_TIMEOUT,
-        )
-        resp.raise_for_status()
-        texto = resp.text
-    except Exception as e:
+    texto = None
+    for intento in range(1, REINTENTOS + 1):
+        try:
+            resp = _sesion.get(
+                f"{API_URL}/inventario",
+                headers={"x-api-key": API_KEY},
+                timeout=(CONNECT_TIMEOUT, API_TIMEOUT),
+            )
+            resp.raise_for_status()
+            texto = resp.text
+            break
+        except Exception as e:
+            if intento < REINTENTOS:
+                espera = ESPERA_BASE * (2 ** (intento - 1))
+                log.warning(f"No se pudo bajar el inventario ({type(e).__name__}), "
+                            f"intento {intento}/{REINTENTOS}. Reintentando en {espera}s...")
+                time.sleep(espera)
+            else:
+                ultimo_error = e
+
+    if texto is None:
+        e = ultimo_error
         if os.path.exists(INVENTARIO):
             log.warning(f"No se pudo bajar el inventario del servidor ({e}). "
                         f"Se usa la copia local.")
