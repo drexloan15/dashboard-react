@@ -199,6 +199,46 @@ def enviar(endpoint: str, filas: list):
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
+def descargar_inventario() -> bool:
+    """Baja el inventario vigente del servidor y reescribe el CSV local.
+
+    Devuelve True si se actualizo. Ante cualquier problema devuelve False y
+    deja el CSV que ya estaba: es preferible monitorear con un inventario de
+    ayer que no monitorear nada.
+    """
+    try:
+        resp = requests.get(
+            f"{API_URL}/inventario",
+            headers={"x-api-key": API_KEY},
+            timeout=API_TIMEOUT,
+        )
+        resp.raise_for_status()
+        texto = resp.text
+    except Exception as e:
+        if os.path.exists(INVENTARIO):
+            log.warning(f"No se pudo bajar el inventario del servidor ({e}). "
+                        f"Se usa la copia local.")
+        else:
+            log.error(f"No se pudo bajar el inventario del servidor ({e}) y no "
+                      f"hay copia local en {INVENTARIO}.")
+        return False
+
+    lineas = [l for l in texto.splitlines() if l.strip()]
+    if len(lineas) < 2:
+        log.warning("El servidor devolvio un inventario vacio. Se conserva la "
+                    "copia local por seguridad.")
+        return False
+
+    # Escritura atomica: si el proceso muere a media escritura, el CSV bueno
+    # sigue intacto en vez de quedar truncado.
+    tmp = INVENTARIO + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="") as fh:
+        fh.write(texto)
+    os.replace(tmp, INVENTARIO)
+    log.info(f"Inventario actualizado desde el servidor: {len(lineas) - 1} impresoras.")
+    return True
+
+
 def main():
     inicio = time.time()
     ahora  = datetime.now()
@@ -208,7 +248,12 @@ def main():
 
     log.info(f"=== Inicio ciclo {ts} ===")
 
-    # Cargar inventario
+    # Cargar inventario: primero se intenta bajar el vigente del servidor,
+    # que es donde se edita ahora (dashboard -> tabla inventario). El CSV
+    # local queda como copia y como respaldo si el servidor no responde, para
+    # que una caida de red no deje un ciclo sin monitorear nada.
+    descargar_inventario()
+
     if not os.path.exists(INVENTARIO):
         log.error(f"No se encontro el inventario: {INVENTARIO}. "
                   f"Tiene que estar junto al .exe, con las columnas IP y SERIE.")

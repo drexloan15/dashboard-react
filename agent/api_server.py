@@ -21,6 +21,7 @@ from typing import List, Optional
 
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 # ─────────────────────────────────────────────
@@ -60,6 +61,8 @@ if not API_KEY:
     raise RuntimeError("AGENT_API_KEY no configurada en agent.env. El servidor no puede arrancar.")
 if not DB_CONFIG["password"]:
     raise RuntimeError("DB_PASSWORD no configurada en agent.env.")
+
+LF = chr(10)
 
 app = FastAPI(title="Agente Lexmark API")
 
@@ -401,6 +404,43 @@ _ESTADO_ACTUAL_UPSERT = """
         contenedor_desecho = EXCLUDED.contenedor_desecho,
         updated_at         = now()
 """
+
+
+@app.get("/inventario", response_class=PlainTextResponse)
+def get_inventario(_=Depends(auth)):
+    """Devuelve el inventario vigente como CSV, para que el agente lo guarde
+    y lo use en vez de un archivo editado a mano en Red A.
+
+    Mismas columnas y mismo orden que el inventario2026.csv de siempre, asi
+    que el agente no necesita cambiar como lo lee.
+
+    Se sirven solo las filas activas: desactivar una impresora en el
+    dashboard la saca del ciclo sin perder su historial ni su ficha.
+    """
+    import csv
+    import io as _io
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT to_regclass('inventario')")
+            if cur.fetchone()[0] is None:
+                # backend/main.py todavia no creo la tabla
+                raise HTTPException(status_code=503,
+                                    detail="El inventario aun no esta inicializado.")
+            cur.execute("""SELECT ip, zona, sede, area, modelo, tipo, serie, conexion
+                             FROM inventario
+                            WHERE activo AND serie <> ''
+                            ORDER BY sede, area, serie""")
+            filas = cur.fetchall()
+    finally:
+        conn.close()
+
+    buf = _io.StringIO()
+    w = csv.writer(buf, lineterminator=LF)
+    w.writerow(["IP", "ZONA", "SEDE", "AREA", "MODELO", "TIPO", "SERIE", "CONEXION"])
+    w.writerows(filas)
+    return PlainTextResponse(buf.getvalue(), media_type="text/csv")
 
 
 @app.post("/estado_actual")

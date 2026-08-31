@@ -28,7 +28,8 @@ import psycopg2.pool
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -329,6 +330,50 @@ def init_db():
                 created_at     TIMESTAMPTZ  DEFAULT NOW()
             )
         """)
+        # ── Inventario editable desde el dashboard ────────────────────
+        # Fuente de verdad de QUE impresoras se monitorean. El agente lo
+        # descarga en cada ciclo y escribe su inventario2026.csv local, en
+        # vez de que alguien edite el CSV a mano en el servidor de Red A.
+        # La clave es la serie, igual que en estado_actual: la IP se muda.
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS inventario (
+                serie      TEXT PRIMARY KEY,
+                ip         TEXT NOT NULL,
+                sede       TEXT NOT NULL DEFAULT '',
+                area       TEXT NOT NULL DEFAULT '',
+                zona       TEXT NOT NULL DEFAULT '',
+                modelo     TEXT NOT NULL DEFAULT '',
+                tipo       TEXT NOT NULL DEFAULT '',
+                conexion   TEXT NOT NULL DEFAULT '',
+                activo     BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_by TEXT NOT NULL DEFAULT ''
+            )
+        """)
+        cur.execute("CREATE INDEX IF NOT EXISTS inv_ip_idx   ON inventario(ip)")
+        cur.execute("CREATE INDEX IF NOT EXISTS inv_sede_idx ON inventario(sede)")
+
+        # Siembra inicial: estado_actual ya tiene las impresoras que el agente
+        # viene reportando desde su CSV, con los mismos campos. Solo corre si
+        # inventario esta vacio, asi que no pisa ediciones posteriores.
+        cur.execute("SELECT count(*) FROM inventario")
+        if cur.fetchone()[0] == 0:
+            cur.execute("""
+                INSERT INTO inventario (serie, ip, sede, area, zona, modelo,
+                                        tipo, conexion, updated_by)
+                SELECT serie, ip,
+                       COALESCE(sede,''),  COALESCE(area,''),
+                       COALESCE(zona,''),  COALESCE(modelo_inv,''),
+                       COALESCE(tipo,''),  COALESCE(conexion,''),
+                       'siembra-inicial'
+                  FROM estado_actual
+                 WHERE serie <> ''
+                ON CONFLICT (serie) DO NOTHING
+            """)
+            if cur.rowcount:
+                print(f"[db] inventario sembrado con {cur.rowcount} impresoras "
+                      f"desde estado_actual")
+
     print("[db] tablas listas")
 
 # ── PR_STATS: CACHE ───────────────────────────────────────────────────────────
@@ -488,6 +533,16 @@ threading.Thread(target=lambda: [time.sleep(300) or _load_pr_cache() for _ in it
 class AlertaStatusBody(BaseModel):
     estado:     str
     updated_by: str = "admin"
+
+class InventarioBody(BaseModel):
+    ip:       str
+    sede:     str = ""
+    area:     str = ""
+    zona:     str = ""
+    modelo:   str = ""
+    tipo:     str = ""
+    conexion: str = ""
+    activo:   bool = True
 
 class PinBody(BaseModel):
     pin: str
@@ -675,6 +730,95 @@ async def delete_alerta_status(alert_key: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 # ── SOLICITUDES DE SUMINISTROS ────────────────────────────────────────────────
+
+# ── INVENTARIO ────────────────────────────────────────────────────────────────
+# Fuente de verdad de que impresoras se monitorean. El agente lo descarga en
+# cada ciclo, asi que un error aca deja de monitorear equipos: por eso las
+# mutaciones exigen el PIN CONTRA EL SERVIDOR y no solo contra el frontend,
+# a diferencia de /alertas/status.
+
+def _exigir_pin(pin: str | None, request: Request, accion: str) -> None:
+    if not ADMIN_PIN:
+        raise HTTPException(status_code=503, detail="Acceso admin no configurado.")
+    client = _client_ip(request)
+    if not _rate_limit_ok(f"inv:{client}", PIN_MAX_ATTEMPTS, PIN_WINDOW_S):
+        _audit.warning(f"INV_RATE_LIMITED ip={client}")
+        raise HTTPException(status_code=429, detail="Demasiados intentos. Espera un momento.")
+    if pin != ADMIN_PIN:
+        _audit.warning(f"INV_PIN_FAIL ip={client} accion={accion}")
+        time.sleep(0.4)
+        raise HTTPException(status_code=403, detail="PIN invalido.")
+
+def _serie_valida(serie: str) -> str:
+    serie = (serie or "").strip()
+    if not serie:
+        raise HTTPException(status_code=422, detail="La serie es obligatoria: identifica la impresora.")
+    return serie
+
+@app.get("/inventario")
+def get_inventario():
+    with get_db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("""
+            SELECT serie, ip, sede, area, zona, modelo, tipo, conexion, activo,
+                   updated_at::text AS updated_at, updated_by
+              FROM inventario
+             ORDER BY sede, area, serie
+        """)
+        return {"items": [dict(r) for r in cur.fetchall()]}
+
+@app.put("/inventario/{serie}")
+def put_inventario(serie: str, body: InventarioBody, request: Request,
+                   x_admin_pin: str | None = Header(default=None)):
+    _exigir_pin(x_admin_pin, request, f"PUT {serie}")
+    serie = _serie_valida(serie)
+    if not body.ip.strip():
+        raise HTTPException(status_code=422, detail="La IP es obligatoria.")
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO inventario (serie, ip, sede, area, zona, modelo, tipo,
+                                    conexion, activo, updated_at, updated_by)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW(), %s)
+            ON CONFLICT (serie) DO UPDATE SET
+                ip=EXCLUDED.ip, sede=EXCLUDED.sede, area=EXCLUDED.area,
+                zona=EXCLUDED.zona, modelo=EXCLUDED.modelo, tipo=EXCLUDED.tipo,
+                conexion=EXCLUDED.conexion, activo=EXCLUDED.activo,
+                updated_at=NOW(), updated_by=EXCLUDED.updated_by
+        """, (serie, body.ip.strip(), body.sede, body.area, body.zona,
+              body.modelo, body.tipo, body.conexion, body.activo, "admin"))
+    _audit.info(f"INV_PUT ip={_client_ip(request)!r} serie={serie!r} nueva_ip={body.ip!r}")
+    return {"ok": True, "serie": serie}
+
+@app.delete("/inventario/{serie}")
+def delete_inventario(serie: str, request: Request,
+                      x_admin_pin: str | None = Header(default=None)):
+    _exigir_pin(x_admin_pin, request, f"DELETE {serie}")
+    serie = _serie_valida(serie)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM inventario WHERE serie = %s", (serie,))
+        borradas = cur.rowcount
+    if not borradas:
+        raise HTTPException(status_code=404, detail=f"No existe la serie {serie}.")
+    _audit.info(f"INV_DELETE ip={_client_ip(request)!r} serie={serie!r}")
+    return {"ok": True, "serie": serie}
+
+@app.get("/inventario/export.csv", response_class=PlainTextResponse)
+def export_inventario():
+    """El mismo CSV que consume el agente, para descargarlo o respaldarlo."""
+    import csv, io as _io
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("""SELECT ip, zona, sede, area, modelo, tipo, serie, conexion
+                         FROM inventario WHERE activo ORDER BY sede, area, serie""")
+        filas = cur.fetchall()
+    buf = _io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(["IP", "ZONA", "SEDE", "AREA", "MODELO", "TIPO", "SERIE", "CONEXION"])
+    w.writerows(filas)
+    return PlainTextResponse(buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="inventario2026.csv"'})
 
 @app.get("/config/email")
 async def get_email_config():
