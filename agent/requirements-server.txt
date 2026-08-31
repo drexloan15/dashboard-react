@@ -1,0 +1,8 @@
+# api_server.py — corre en Red B (192.168.1.51), junto a PostgreSQL.
+# Instalar con:  pip install -r requirements-server.txt
+#
+# OJO: psycopg 3 (NO psycopg2). backend/main.py usa psycopg2 y api_server
+# usa psycopg v3 — son paquetes distintos y conviven sin problema.
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+psycopg[binary]==3.3.4

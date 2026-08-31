@@ -1,0 +1,14 @@
+# pr_stats_agent.py — corre en el servidor Lexmark Solutions (Windows).
+# Lee la BD Firebird SOLUTIONINFO.FDB y envia los trabajos de impresion
+# a api_server a traves del tunel cloudflared.
+# Instalar con:  pip install -r requirements-prstats.txt
+#
+# OJO: el paquete es "firebird-driver" (import: firebird.driver), NO el
+# viejo "fdb". Ademas necesita fbclient.dll en la maquina — ya viene con
+# Lexmark Solutions, la ruta se configura con FIREBIRD_LIB en agent.env.
+requests==2.34.2
+firebird-driver>=1.10
+
+# Para empaquetar como .exe (no es dependencia de runtime):
+#   pip install pyinstaller
+#   pyinstaller --onefile pr_stats_agent.py

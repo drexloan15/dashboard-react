@@ -1,0 +1,10 @@
+# agente_lexmark.py — corre en Red A (Windows), consulta impresoras por SNMP
+# y envia a api_server a traves del tunel cloudflared.
+# Instalar con:  pip install -r requirements-agente.txt
+requests==2.34.2
+pandas==3.0.3
+puresnmp==2.0.1
+
+# Para empaquetar como .exe (no es dependencia de runtime):
+#   pip install pyinstaller
+#   pyinstaller --onefile agente_lexmark.py

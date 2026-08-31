@@ -14,7 +14,18 @@ backend/.audit.log
 backend/audit.log
 agent/*.log
 
-agent/
+# Agente: solo se ignoran secretos/artefactos, el código sí se trackea
+# (cloudflared: el binario cae en agent/*.exe; sus credenciales en agent/.cloudflared/)
+agent/.cloudflared/
+agent/agent.env
+agent/*.exe
+agent/pr_stats_last_id.txt
+agent/inventario2026.csv
+
+
+# Python
+__pycache__/
+*.pyc
 
 # Build artifacts
 tsconfig.tsbuildinfo
