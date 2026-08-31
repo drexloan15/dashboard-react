@@ -199,8 +199,17 @@ def main():
     log.info(f"=== Inicio ciclo {ts} ===")
 
     # Cargar inventario
+    if not os.path.exists(INVENTARIO):
+        log.error(f"No se encontro el inventario: {INVENTARIO}. "
+                  f"Tiene que estar junto al .exe, con las columnas IP y SERIE.")
+        sys.exit(1)
     inv = pd.read_csv(INVENTARIO)
     inv.columns = [c.strip().upper() for c in inv.columns]
+    faltantes = [c for c in ("IP", "SERIE") if c not in inv.columns]
+    if faltantes:
+        log.error(f"Al inventario le faltan columnas obligatorias: {', '.join(faltantes)}. "
+                  f"La SERIE es la identidad de la impresora y el servidor la exige.")
+        sys.exit(1)
     inv["IP"] = inv["IP"].str.strip()
     log.info(f"Inventario cargado: {len(inv)} impresoras.")
 

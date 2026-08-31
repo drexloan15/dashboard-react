@@ -3,12 +3,24 @@
 # Instalar con:  pip install -r requirements-agente.txt
 requests==2.34.2
 pandas==3.0.3
-puresnmp==2.0.1
+# puresnmp 1.x: el agente usa la API sincrona  get(ip, community, oid, ...).
+# En la 2.x eso desaparecio -- pasa a un Client asincrono -- y el import
+# "from puresnmp import get" revienta. NO actualizar sin portar el codigo.
+puresnmp==1.11.0.post1
 
 # Para empaquetar como .exe (no es dependencia de runtime). En Red A no hay
 # Python, asi que el agente SIEMPRE va empaquetado:
 #   pip install pyinstaller
-#   pyinstaller --onefile agente_lexmark.py
+#   pyinstaller --onefile --copy-metadata t61codec --copy-metadata puresnmp agente_lexmark.py
+#
+# --copy-metadata NO es opcional: t61codec (dependencia de puresnmp) pide su
+# propia metadata al importarse. Sin esos flags el .exe compila sin quejarse
+# y revienta al arrancar con:
+#     PackageNotFoundError: No package metadata was found for t61codec
+#
+# Compilar desde un venv limpio con SOLO estas dependencias: si se usa el
+# Python global, PyInstaller arrastra todo el site-packages (el .exe pasa de
+# 32 MB a 106 MB).
 #
 # api_url.py debe estar en la misma carpeta al compilar -- PyInstaller lo
 # incluye solo por seguir el import, no hay que listarlo aparte.
