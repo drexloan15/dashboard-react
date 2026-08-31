@@ -104,6 +104,8 @@ _refresh_lock    = threading.Lock()
 _db_pool:        psycopg2.pool.ThreadedConnectionPool | None = None
 _db_last_error:  float                                       = 0.0
 DB_ERROR_BACKOFF = 30
+DB_INIT_RETRIES  = int(os.getenv("DB_INIT_RETRIES", "60"))   # 60 x 5 s = 5 min
+DB_INIT_DELAY    = int(os.getenv("DB_INIT_DELAY",   "5"))
 
 # ── DB: POOL ─────────────────────────────────────────────────────────────────
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool | None:
@@ -179,17 +181,70 @@ def get_db():
                 _reset_pool()
 
 # ── DB: CREAR / MIGRAR TABLAS ────────────────────────────────────────────────
+def _pk_columns(cur, tabla: str) -> list[str]:
+    cur.execute("""
+        SELECT a.attname
+          FROM pg_index i
+          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+         WHERE i.indrelid = %s::regclass AND i.indisprimary
+         ORDER BY a.attnum
+    """, (tabla,))
+    return [r[0] for r in cur.fetchall()]
+
+def _migrar_clave_a_serie(cur) -> None:
+    """Pasa estado_actual e historial de estar identificados por ip a estarlo
+    por serie. No hace nada si ya estan migrados."""
+    if _pk_columns(cur, "estado_actual") != ["ip"]:
+        return
+
+    cur.execute("SELECT count(*) FROM estado_actual")
+    filas_estado = cur.fetchone()[0]
+    cur.execute("SELECT count(*) FROM historial")
+    filas_hist = cur.fetchone()[0]
+
+    if filas_estado or filas_hist:
+        raise RuntimeError(
+            f"estado_actual todavia usa la ip como clave y tiene datos "
+            f"({filas_estado} filas en estado_actual, {filas_hist} en historial). "
+            f"La migracion automatica solo corre con las tablas vacias porque "
+            f"hay que deduplicar las filas fantasma (misma impresora bajo dos "
+            f"ip) y decidir que hacer con las series vacias o repetidas. "
+            f"Migrar a mano antes de arrancar."
+        )
+
+    print("[init] migrando la clave de estado_actual/historial: ip -> serie", flush=True)
+    cur.execute("ALTER TABLE estado_actual DROP CONSTRAINT estado_actual_pkey")
+    cur.execute("UPDATE estado_actual SET serie = '' WHERE serie IS NULL")
+    cur.execute("ALTER TABLE estado_actual ALTER COLUMN serie SET NOT NULL")
+    cur.execute("ALTER TABLE estado_actual ALTER COLUMN ip    SET NOT NULL")
+    cur.execute("ALTER TABLE estado_actual ADD PRIMARY KEY (serie)")
+
+    # historial: la unicidad del snapshot horario tambien pasa a la serie
+    cur.execute("""
+        SELECT conname FROM pg_constraint
+         WHERE conrelid = 'historial'::regclass AND contype = 'u'
+    """)
+    for (conname,) in cur.fetchall():
+        cur.execute(f"ALTER TABLE historial DROP CONSTRAINT {conname}")
+    cur.execute("ALTER TABLE historial ADD CONSTRAINT historial_serie_fecha_hora_key "
+                "UNIQUE (serie, fecha, hora)")
+
 def init_db():
     supply_ddl = "\n".join(f"    {c.lower()} REAL," for c in SUPPLY_COLS)
     with get_db() as conn:
         cur = conn.cursor()
 
+        # La identidad de una impresora es su SERIE, no su IP: la IP se muda
+        # (cambio de red, DHCP) y la serie no. Cuando la clave era la IP, mover
+        # una impresora creaba una fila nueva y dejaba la vieja como fantasma
+        # "desactivada" para siempre. La serie es el DNI del equipo.
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS estado_actual (
-                ip          TEXT PRIMARY KEY,
+                serie       TEXT PRIMARY KEY,
+                ip          TEXT NOT NULL,
                 sede        TEXT, area       TEXT, zona TEXT,
                 estado      TEXT,
-                modelo_inv  TEXT, tipo       TEXT, serie      TEXT,
+                modelo_inv  TEXT, tipo       TEXT,
                 conexion    TEXT, modelo_snmp TEXT,
                 fecha       TEXT, hora       SMALLINT,
                 contador    REAL,
@@ -198,8 +253,29 @@ def init_db():
             )
         """)
         for col, coltype in [("tipo","TEXT"),("serie","TEXT"),("conexion","TEXT"),
-                              ("modelo_snmp","TEXT"),("fecha","TEXT"),("hora","SMALLINT")]:
+                              ("modelo_snmp","TEXT"),("fecha","TEXT"),("hora","SMALLINT"),
+                              ("serie_snmp","TEXT")]:
             cur.execute(f"ALTER TABLE estado_actual ADD COLUMN IF NOT EXISTS {col} {coltype}")
+
+        # ── Migracion de identidad: ip -> serie ───────────────────────────
+        # CREATE TABLE IF NOT EXISTS no toca una tabla que ya existe, asi que
+        # las instalaciones anteriores (clave = ip) hay que convertirlas aca.
+        # Es idempotente: si ya esta migrada, no hace nada.
+        #
+        # Solo se hace en automatico con la tabla vacia. Con datos haria falta
+        # deduplicar filas fantasma y decidir que hacer con series repetidas o
+        # en blanco, y eso no se resuelve a ciegas dentro de un arranque.
+        _migrar_clave_a_serie(cur)
+
+        # serie_snmp (numero de serie real, leido por SNMP) identifica la
+        # impresora de forma mas robusta que la IP -- indice unico parcial
+        # para permitir multiples impresoras sin serial leido (NULL/vacio)
+        # sin que colisionen entre si.
+        cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS estado_actual_serie_snmp_uk
+                ON estado_actual (serie_snmp)
+                WHERE serie_snmp IS NOT NULL AND serie_snmp <> ''
+        """)
 
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS historial (
@@ -214,18 +290,22 @@ def init_db():
                 estado      TEXT,
                 contador    REAL,
                 {supply_ddl}
-                UNIQUE (ip, fecha, hora)
+                UNIQUE (serie, fecha, hora)
             )
         """)
         for col, coltype in [("zona","TEXT"),("area","TEXT"),("modelo_inv","TEXT"),
-                              ("tipo","TEXT"),("serie","TEXT"),("conexion","TEXT"),("modelo_snmp","TEXT")]:
+                              ("tipo","TEXT"),("serie","TEXT"),("conexion","TEXT"),("modelo_snmp","TEXT"),
+                              ("serie_snmp","TEXT")]:
             cur.execute(f"ALTER TABLE historial ADD COLUMN IF NOT EXISTS {col} {coltype}")
 
+        cur.execute("CREATE INDEX IF NOT EXISTS estado_ip_idx   ON estado_actual(ip)")
         cur.execute("CREATE INDEX IF NOT EXISTS hist_ip_idx     ON historial(ip)")
+        cur.execute("CREATE INDEX IF NOT EXISTS hist_serie_idx  ON historial(serie)")
         cur.execute("CREATE INDEX IF NOT EXISTS hist_ts_idx     ON historial(timestamp DESC)")
         cur.execute("CREATE INDEX IF NOT EXISTS hist_fecha_idx  ON historial(fecha)")
         cur.execute("CREATE INDEX IF NOT EXISTS hist_sede_idx   ON historial(sede)")
         cur.execute("CREATE INDEX IF NOT EXISTS hist_estado_idx ON historial(estado)")
+        cur.execute("CREATE INDEX IF NOT EXISTS hist_serie_snmp_idx ON historial(serie_snmp)")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS alerta_estado (
@@ -326,8 +406,9 @@ def _query_estado(conn) -> list[dict]:
     sc = ", ".join(f'{c.lower()} AS "{c}"' for c in SUPPLY_COLS)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(f"""
-        SELECT ip AS "IP", sede AS "SEDE", area AS "AREA", zona AS "ZONA",
-               estado AS "ESTADO", modelo_inv AS "MODELO_INV", contador AS "CONTADOR",
+        SELECT serie AS "SERIE", ip AS "IP", sede AS "SEDE", area AS "AREA",
+               zona AS "ZONA", estado AS "ESTADO", modelo_inv AS "MODELO_INV",
+               contador AS "CONTADOR",
                {sc}
         FROM estado_actual
     """)
@@ -337,7 +418,8 @@ def _query_historial_recent(conn, days: int = 30) -> list[dict]:
     sc = ", ".join(f'{c.lower()} AS "{c}"' for c in SUPPLY_COLS)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(f"""
-        SELECT ip AS "IP", sede AS "SEDE", estado AS "ESTADO", contador AS "CONTADOR",
+        SELECT serie AS "SERIE", ip AS "IP", sede AS "SEDE", estado AS "ESTADO",
+               contador AS "CONTADOR",
                {sc},
                timestamp::text AS "TIMESTAMP", fecha::text AS "FECHA",
                timestamp::text AS "_ts",        fecha::text AS "_fecha"
@@ -382,7 +464,21 @@ def _bg_loop():
 # 3. pr_cache : 5 queries agregadas sobre pr_stats — se mueve a background
 #               para que uvicorn pueda abrir el puerto de inmediato.
 #               /pr_stats devuelve {"exists": False} hasta que esté listo.
-init_db()
+#
+# init_db reintenta: tras un apagado sucio, Postgres hace fsync de todo el
+# datadir antes de aceptar conexiones (~45 s observados). En un reboot del host
+# Docker ignora depends_on/healthcheck y arranca los contenedores en paralelo,
+# asi que el backend debe esperar por su cuenta en vez de morir en bucle.
+for _intento in range(1, DB_INIT_RETRIES + 1):
+    try:
+        init_db()
+        break
+    except Exception as _e:
+        if _intento == DB_INIT_RETRIES:
+            raise
+        print(f"[init] BD no lista ({_intento}/{DB_INIT_RETRIES}): {_e}", flush=True)
+        _db_last_error = 0          # anular el backoff de 30 s durante el arranque
+        time.sleep(DB_INIT_DELAY)
 _load_cache_from_db()
 threading.Thread(target=_load_pr_cache,  daemon=True).start()
 threading.Thread(target=_bg_loop,        daemon=True).start()
@@ -485,7 +581,8 @@ async def get_historial_page(
             cur.execute(f"SELECT COUNT(*) AS total FROM historial {where_sql}", params)
             total = cur.fetchone()["total"]
             cur.execute(f"""
-                SELECT ip AS "IP", sede AS "SEDE", estado AS "ESTADO", contador AS "CONTADOR",
+                SELECT serie AS "SERIE", ip AS "IP", sede AS "SEDE", estado AS "ESTADO",
+                       contador AS "CONTADOR",
                        {sc},
                        timestamp::text AS "TIMESTAMP", fecha::text AS "FECHA",
                        timestamp::text AS "_ts",        fecha::text AS "_fecha"

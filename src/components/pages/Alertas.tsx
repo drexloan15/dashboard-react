@@ -184,8 +184,11 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
   const { data: statusData = {}, isLoading: statusLoading } = useAlertasStatus();
   const mutation = useAlertasMutation();
 
-  function alertKey(a: { ip: string; suministro: string }) {
-    return `${a.ip}::${a.suministro}`;
+  // Se ancla a la SERIE y no a la ip: si la impresora cambia de red, la
+  // alerta que alguien ya marcó como "listo" sigue siendo la misma alerta.
+  // Con la ip, un cambio de red resucitaba alertas ya atendidas.
+  function alertKey(a: { serie: string; suministro: string }) {
+    return `${a.serie}::${a.suministro}`;
   }
 
   function requireAdmin(action: () => void) {
@@ -230,7 +233,7 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
     });
   }
 
-  type Alert = { ip: string; sede: string; area: string; modelo: string; suministro: string; nivel: "CRÍTICO" | "BAJO"; color: string; valor: number };
+  type Alert = { serie: string; ip: string; sede: string; area: string; modelo: string; suministro: string; nivel: "CRÍTICO" | "BAJO"; color: string; valor: number };
 
   const todasAlertas = useMemo(() => {
     const result: Alert[] = [];
@@ -239,7 +242,7 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
         const v = toNum(p[col]);
         if (v !== null && v <= 30) {
           result.push({
-            ip: p.IP, sede: p.SEDE, area: p.AREA || "",
+            serie: p.SERIE, ip: p.IP, sede: p.SEDE, area: p.AREA || "",
             modelo: String(p.MODELO_INV || ""),
             suministro: label,
             nivel: v <= 10 ? "CRÍTICO" : "BAJO",

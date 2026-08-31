@@ -1,4 +1,7 @@
 export interface Printer {
+  /** Identidad estable de la impresora: la IP cambia, la serie no.
+   *  Es la clave con la que el backend la reconoce entre ciclos. */
+  SERIE: string;
   IP: string;
   SEDE: string;
   AREA?: string;
@@ -22,6 +25,7 @@ export interface Printer {
 }
 
 export interface HistorialRow {
+  SERIE?: string;
   TIMESTAMP?: string;
   FECHA?: string;
   IP: string;

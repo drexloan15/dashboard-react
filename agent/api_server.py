@@ -124,6 +124,41 @@ def clean_serie(val: Optional[str]) -> Optional[str]:
     return val
 
 
+def exigir_series(filas) -> None:
+    """La serie es la PRIMARY KEY de estado_actual y la clave del snapshot en
+    historial. Una fila sin serie no se puede guardar: con la cadena vacia
+    todas las impresoras sin serie colisionarian en la misma fila, pisandose
+    entre si. Se rechaza el lote entero antes de escribir nada, para que el
+    problema se vea en el CSV de inventario y no quede enterrado en la BD."""
+    sin_serie = [f.IP for f in filas if not clean_serie(f.SERIE)]
+    if sin_serie:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{len(sin_serie)} fila(s) sin SERIE en inventario2026.csv: "
+                f"{', '.join(sin_serie[:10])}"
+                f"{' ...' if len(sin_serie) > 10 else ''}. "
+                f"La serie es la identidad de la impresora y es obligatoria."
+            ),
+        )
+
+    vistas, repetidas = set(), set()
+    for f in filas:
+        serie = clean_serie(f.SERIE)
+        if serie in vistas:
+            repetidas.add(serie)
+        vistas.add(serie)
+    if repetidas:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"SERIE repetida en inventario2026.csv: "
+                f"{', '.join(sorted(repetidas)[:10])}. "
+                f"Dos impresoras con la misma serie se fusionarian en una."
+            ),
+        )
+
+
 # Claves canónicas de suministro -- las mismas de SUPPLY_COLS en backend/main.py.
 SUPPLY_TIPOS = [
     "TONER_NEGRO", "TONER_CIAN", "TONER_MAGENTA", "TONER_AMARILLO",
@@ -268,14 +303,17 @@ _ESTADO_ACTUAL_UPSERT = """
         %s, %s, %s, %s,
         %s, %s, %s, %s
     )
-    ON CONFLICT (ip) DO UPDATE SET
+    -- Conflicto por SERIE, no por ip: la serie es la identidad estable del
+    -- equipo. Asi, si la impresora cambia de ip, se ACTUALIZA su fila (y con
+    -- ella la columna ip) en vez de crear una nueva y dejar la vieja colgada.
+    ON CONFLICT (serie) DO UPDATE SET
+        ip                 = EXCLUDED.ip,
         sede               = EXCLUDED.sede,
         area               = EXCLUDED.area,
         zona               = EXCLUDED.zona,
         estado             = EXCLUDED.estado,
         modelo_inv         = EXCLUDED.modelo_inv,
         tipo               = EXCLUDED.tipo,
-        serie              = EXCLUDED.serie,
         conexion           = EXCLUDED.conexion,
         modelo_snmp        = EXCLUDED.modelo_snmp,
         serie_snmp         = COALESCE(EXCLUDED.serie_snmp, estado_actual.serie_snmp),
@@ -300,12 +338,14 @@ _ESTADO_ACTUAL_UPSERT = """
 
 @app.post("/estado_actual")
 def post_estado_actual(payload: Payload, _=Depends(auth)):
-    """UPSERT en estado_actual — una fila por IP, se actualiza en cada ciclo.
+    """UPSERT en estado_actual — una fila por SERIE, se actualiza en cada ciclo.
     Ademas: detecta el mismo serie_snmp bajo otra IP (eventos_identidad),
     caidas del contador de paginas (eventos_contador), y altas/cambios/
     movimientos de suministros por numero de serie (suministros_actual /
     suministros_eventos). Los campos de identidad/suministro son opcionales
     -- el agente v1 (sin estos campos) sigue funcionando igual que hoy."""
+
+    exigir_series(payload.filas)
 
     ips = [f.IP for f in payload.filas]
     series_snmp_nuevas = list({s for f in payload.filas if (s := clean_serie(f.SERIE_SNMP))})
@@ -453,7 +493,8 @@ def post_estado_actual(payload: Payload, _=Depends(auth)):
 
 @app.post("/historial")
 def post_historial(payload: Payload, _=Depends(auth)):
-    """INSERT en historial con UPSERT por (ip, fecha, hora) y purga de registros antiguos."""
+    """INSERT en historial con UPSERT por (serie, fecha, hora) y purga de registros antiguos."""
+    exigir_series(payload.filas)
     fecha_limite = (date.today() - timedelta(days=DIAS_HISTORIAL)).strftime("%Y-%m-%d")
 
     query = """
@@ -472,7 +513,8 @@ def post_historial(payload: Payload, _=Depends(auth)):
             %s, %s, %s, %s,
             %s, %s, %s, %s
         )
-        ON CONFLICT (ip, fecha, hora) DO UPDATE SET
+        ON CONFLICT (serie, fecha, hora) DO UPDATE SET
+            ip                 = EXCLUDED.ip,
             timestamp          = EXCLUDED.timestamp,
             serie_snmp         = EXCLUDED.serie_snmp,
             estado             = EXCLUDED.estado,
