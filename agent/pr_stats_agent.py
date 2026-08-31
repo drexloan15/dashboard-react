@@ -144,7 +144,9 @@ COLUMNAS = [
     "SUBMITDATEUTC", "FINALDATEUTC",
 ]
 
-def extraer_filas(last_id: int) -> list[dict]:
+def extraer_lotes(last_id: int):
+    """Genera lotes de BATCH_SIZE filas ya convertidas a dict, leyendo de
+    Firebird a medida que se necesitan en vez de cargarlo todo."""
     cols = ", ".join(f"a.{c}" for c in COLUMNAS)
 
     if last_id == 0:
@@ -173,23 +175,28 @@ def extraer_filas(last_id: int) -> list[dict]:
     try:
         cur = con.cursor()
         cur.execute(sql)
-        rows = cur.fetchall()
-        log.info(f"Filas obtenidas de Firebird: {len(rows)}")
 
-        result = []
-        for row in rows:
-            fila = {}
-            for i, col in enumerate(COLUMNAS):
-                val = row[i]
-                if isinstance(val, datetime):
-                    fila[col] = val.strftime("%Y-%m-%d %H:%M:%S")
-                elif val is None:
-                    fila[col] = None
-                else:
-                    fila[col] = str(val)
-            result.append(fila)
-
-        return result
+        # fetchmany y no fetchall: la primera sincronizacion trae ~485k filas y
+        # materializarlas todas eran mas de 1 GB de dicts. El servidor se ponia
+        # a paginar a disco y un lote de 500 filas tardaba 53 s en enviarse,
+        # hasta que la conexion se caia. Asi la memoria queda acotada al lote.
+        while True:
+            rows = cur.fetchmany(BATCH_SIZE)
+            if not rows:
+                break
+            lote = []
+            for row in rows:
+                fila = {}
+                for i, col in enumerate(COLUMNAS):
+                    val = row[i]
+                    if isinstance(val, datetime):
+                        fila[col] = val.strftime("%Y-%m-%d %H:%M:%S")
+                    elif val is None:
+                        fila[col] = None
+                    else:
+                        fila[col] = str(val)
+                lote.append(fila)
+            yield lote
     finally:
         con.close()
 
@@ -229,37 +236,42 @@ def main():
     last_id = leer_last_id()
     log.info(f"Ultimo ID sincronizado: {last_id}")
 
+    total_ok      = 0
+    total_leidas  = 0
+    nuevo_last_id = last_id
+    n_lote        = 0
+    corte         = False
+
     try:
-        filas = extraer_filas(last_id)
+        for batch in extraer_lotes(last_id):
+            n_lote += 1
+            total_leidas += len(batch)
+            if enviar_batch(batch):
+                total_ok += len(batch)
+                ids = [int(f["ID"]) for f in batch if f.get("ID")]
+                if ids:
+                    nuevo_last_id = max(nuevo_last_id, max(ids))
+                # El last_id se guarda en cada lote y no al final: si el ciclo
+                # se corta a mitad de una sincronizacion larga, la siguiente
+                # corrida retoma donde quedo en vez de empezar de cero.
+                guardar_last_id(nuevo_last_id)
+                if n_lote % 20 == 0:
+                    log.info(f"Progreso: {total_ok} filas enviadas...")
+            else:
+                log.error(f"Batch {n_lote} fallo. Deteniendo para reintentar "
+                          f"en la proxima corrida desde el ID {nuevo_last_id}.")
+                corte = True
+                break
     except Exception as e:
         log.error(f"Error al consultar Firebird: {e}")
-        return
+        corte = True
 
-    if not filas:
+    if total_leidas == 0 and not corte:
         log.info("Sin filas nuevas. Nada que enviar.")
-        return
-
-    total_ok      = 0
-    nuevo_last_id = last_id
-
-    for i in range(0, len(filas), BATCH_SIZE):
-        batch = filas[i : i + BATCH_SIZE]
-        if enviar_batch(batch):
-            total_ok += len(batch)
-            ids = [int(f["ID"]) for f in batch if f.get("ID")]
-            if ids:
-                nuevo_last_id = max(nuevo_last_id, max(ids))
-        else:
-            log.error(f"Batch {i//BATCH_SIZE + 1} fallo. Deteniendo para reintentar.")
-            break
-
-    if total_ok > 0:
-        guardar_last_id(nuevo_last_id)
-        log.info(f"Guardado last_id={nuevo_last_id}")
 
     fin = datetime.now()
-    log.info(f"=== Ciclo completado: {total_ok}/{len(filas)} filas en "
-             f"{round((fin - inicio).total_seconds(), 1)}s ===\n")
+    log.info(f"=== Ciclo completado: {total_ok}/{total_leidas} filas en "
+             f"{round((fin - inicio).total_seconds(), 1)}s ===")
 
 if __name__ == "__main__":
     main()
