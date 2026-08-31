@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 import requests
 
+from api_url import resolve_api_url, ApiUrlError
+
 # ─────────────────────────────────────────────
 # BASE_DIR: funciona tanto como .py como .exe
 # ─────────────────────────────────────────────
@@ -52,13 +54,11 @@ INVENTARIO       = os.path.join(BASE_DIR, "inventario2026.csv")
 
 # API_URL apunta al túnel cloudflared que expone api_server.py en Red B.
 # Red A y Red B no comparten LAN, así que no hay IP directa que usar.
-# Ejemplo: https://algo-aleatorio.trycloudflare.com
-API_URL          = os.environ.get("API_URL", "")
+# Se resuelve en cada ejecución: si está API_URL_FILE, la lee de ahí (archivo
+# compartido o URL), así un cambio del túnel se actualiza en un solo sitio.
+# Ver api_url.py.
 API_KEY          = os.environ.get("AGENT_API_KEY", "")
 
-if not API_URL:
-    print("[ERROR] API_URL no configurada en agent.env. El agente no puede enviar datos.")
-    sys.exit(1)
 if not API_KEY:
     print("[ERROR] AGENT_API_KEY no configurada en agent.env.")
     sys.exit(1)
@@ -78,6 +78,14 @@ logging.basicConfig(
     ]
 )
 log = logging.getLogger(__name__)
+
+# Se resuelve despues del logger a proposito: si API_URL_FILE no responde y se
+# cae al cache, ese aviso tiene que quedar en agente.log, no perderse.
+try:
+    API_URL = resolve_api_url(BASE_DIR, log)
+except ApiUrlError as _e:
+    log.error(str(_e))
+    sys.exit(1)
 
 COLUMNAS = [
     "TIMESTAMP", "FECHA", "HORA", "IP", "ZONA", "SEDE", "AREA",

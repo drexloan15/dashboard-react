@@ -20,6 +20,10 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+# api_url solo usa la stdlib al importarse (requests se carga perezosamente),
+# asi que es seguro tenerlo aca arriba pese al import tardio de requests.
+from api_url import resolve_api_url, ApiUrlError
+
 # ─────────────────────────────────────────────
 # BASE_DIR: funciona como .py y como .exe
 # ─────────────────────────────────────────────
@@ -80,9 +84,16 @@ FIREBIRD_PASSWORD = os.environ.get("FIREBIRD_PASSWORD", "")
 FIREBIRD_CHARSET  = os.environ.get("FIREBIRD_CHARSET",  "UTF8")
 FIREBIRD_LIB      = os.environ.get("FIREBIRD_LIB",     "")
 
-# IMPORTANTE: reemplazar por la IP LAN del servidor B, no un túnel público
-API_URL     = os.environ.get("API_URL",        "")
+# API_URL apunta al túnel cloudflared que expone api_server.py en Red B.
+# Se resuelve en cada ejecución (ver api_url.py): con API_URL_FILE la lee de
+# un archivo compartido o una URL, así el cambio de túnel se hace en un solo
+# sitio y no hay que tocar cada máquina.
 API_KEY     = os.environ.get("AGENT_API_KEY",  "")
+try:
+    API_URL = resolve_api_url(BASE_DIR, log)
+except ApiUrlError as _e:
+    log.error(str(_e))
+    sys.exit(1)
 API_TIMEOUT = int(os.environ.get("API_TIMEOUT", "120"))
 BATCH_SIZE  = int(os.environ.get("BATCH_SIZE",  "500"))
 
@@ -90,7 +101,7 @@ FECHA_INICIO = os.environ.get("FECHA_INICIO", "2026-04-23")
 
 # Validar variables obligatorias
 _missing = [v for v, k in [("FIREBIRD_DB", FIREBIRD_DB), ("FIREBIRD_PASSWORD", FIREBIRD_PASSWORD),
-                             ("API_URL", API_URL), ("AGENT_API_KEY", API_KEY), ("FIREBIRD_LIB", FIREBIRD_LIB)]
+                             ("AGENT_API_KEY", API_KEY), ("FIREBIRD_LIB", FIREBIRD_LIB)]
             if not k]
 if _missing:
     log.error(f"Variables no configuradas en agent.env: {', '.join(m for m, _ in _missing)}")
