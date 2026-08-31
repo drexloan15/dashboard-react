@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { InventarioItem } from "@/types";
 import {
   useInventario,
@@ -78,6 +78,19 @@ export default function Inventario() {
   const [borrador, setBorrador]         = useState<typeof VACIA>(VACIA);
   const [nueva, setNueva]               = useState(false);
   const [aviso, setAviso]               = useState("");
+
+  // El formulario se abre arriba de la tabla. Con 115 filas, al editar una de
+  // abajo quedaba fuera de la pantalla y parecia que el boton no hacia nada.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const primerCampoRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editando) return;
+    panelRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    // preventScroll: focus() hace su propio salto instantaneo y le ganaria
+    // al desplazamiento suave de arriba.
+    primerCampoRef.current?.focus({ preventScroll: true });
+  }, [editando]);
 
   const filtradas = useMemo(() => {
     const q = busqueda.trim().toLowerCase();
@@ -165,7 +178,8 @@ export default function Inventario() {
       {error && <p className="text-[12px] text-red-500">No se pudo cargar el inventario.</p>}
 
       {editando && (
-        <div className="dark:bg-dark-card bg-white rounded-xl border dark:border-dark-border border-light-border p-5">
+        <div ref={panelRef}
+          className="dark:bg-dark-card bg-white rounded-xl border-2 border-blue-500 p-5">
           <h3 className="text-[14px] font-semibold dark:text-dark-text text-light-text mb-4">
             {nueva ? "Nueva impresora" : `Editar ${borrador.serie}`}
           </h3>
@@ -175,6 +189,7 @@ export default function Inventario() {
                 SERIE {nueva ? "(no se puede cambiar después)" : "(fija)"}
               </span>
               <input className={input} value={borrador.serie} disabled={!nueva}
+                ref={nueva ? primerCampoRef : undefined}
                 onChange={e => setBorrador({ ...borrador, serie: e.target.value })} />
             </label>
             {([["ip", "IP"], ["sede", "SEDE"], ["area", "ÁREA"], ["zona", "ZONA"],
@@ -182,6 +197,7 @@ export default function Inventario() {
               <label key={campo} className="flex flex-col gap-1">
                 <span className="text-[11px] dark:text-dark-muted text-light-muted">{etiqueta}</span>
                 <input className={input} value={borrador[campo]}
+                  ref={!nueva && campo === "ip" ? primerCampoRef : undefined}
                   onChange={e => setBorrador({ ...borrador, [campo]: e.target.value })} />
               </label>
             ))}
@@ -217,7 +233,9 @@ export default function Inventario() {
             <tbody>
               {filtradas.map(it => (
                 <tr key={it.serie}
-                  className="border-t dark:border-dark-border border-light-border dark:text-dark-text text-light-text">
+                  className={"border-t dark:border-dark-border border-light-border " +
+                    "dark:text-dark-text text-light-text " +
+                    (editando === it.serie ? "bg-blue-500/10" : "")}>
                   <td className="px-3 py-2 font-mono whitespace-nowrap">{it.serie}</td>
                   <td className="px-3 py-2 font-mono whitespace-nowrap">{it.ip}</td>
                   <td className="px-3 py-2 whitespace-nowrap">{it.sede}</td>
