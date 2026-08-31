@@ -287,8 +287,14 @@ def main():
                 # se corta a mitad de una sincronizacion larga, la siguiente
                 # corrida retoma donde quedo en vez de empezar de cero.
                 guardar_last_id(nuevo_last_id)
-                if n_lote % 20 == 0:
-                    log.info(f"Progreso: {total_ok} filas enviadas...")
+                # Cada lote, no cada 20: en la primera sincronizacion son
+                # ~970 peticiones sobre un enlace lento, y sin senal de vida
+                # frecuente no hay forma de distinguir "avanzando despacio"
+                # de "colgado".
+                ritmo = (datetime.now() - inicio).total_seconds()
+                vel = total_ok / ritmo if ritmo > 0 else 0
+                log.info(f"Lote {n_lote}: {total_ok} filas enviadas "
+                         f"({vel:.0f} filas/s, ultimo ID {nuevo_last_id})")
             else:
                 log.error(f"Batch {n_lote} fallo. Deteniendo para reintentar "
                           f"en la proxima corrida desde el ID {nuevo_last_id}.")
