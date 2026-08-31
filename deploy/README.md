@@ -54,6 +54,29 @@ chmod 600 .env backend.env
 El esquema se crea solo: `init_db()` corre al importar `backend/main.py`, y
 las tablas del agente las crea `api_server` en el primer POST.
 
+## Respaldo automático
+
+El servidor corre en **UTC** (`Etc/UTC`) y Perú es UTC−5, así que la hora del
+cron **no** es la hora local. Línea actual en el `crontab -u jpuccio`:
+
+```cron
+# Respaldo de lexmark_monitor. 00:30 UTC = 19:30 en Peru (UTC-5).
+30 0 * * * /home/jpuccio/vantio-monitoreo/backup-monitoreo-db.sh >> /home/jpuccio/vantio-monitoreo/backups/cron.log 2>&1
+```
+
+El mismo crontab tiene una línea de **VANTIO** (`10 19 * * * backup-vantio-db.sh`),
+de otro proyecto. Al editar, filtrar por `backup-monitoreo-db.sh` y dejar la otra
+intacta.
+
+`backup-monitoreo-db.sh` hace `pg_dump -F c`, aborta si el dump sale vacío
+(mejor conservar el anterior que subir basura), lo copia a
+`gdrive:Monitoreo-Backups` y rota a 14 días, local y remoto.
+
+⚠️ `rclone` usa el `client_id` compartido de Google, que se retira durante 2026.
+Cuando deje de funcionar afectará **los dos** respaldos, el de monitoreo y el de
+VANTIO. Se arregla creando un client_id propio:
+https://rclone.org/drive/#making-your-own-client-id
+
 ## Restaurar la base
 
 ```bash
