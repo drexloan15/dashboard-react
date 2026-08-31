@@ -98,7 +98,15 @@ except ApiUrlError as _e:
     log.error(str(_e))
     sys.exit(1)
 API_TIMEOUT = int(os.environ.get("API_TIMEOUT", "120"))
-BATCH_SIZE  = int(os.environ.get("BATCH_SIZE",  "500"))
+# (conectar, leer) por separado: si el enlace no deja abrir la conexion,
+# conviene fallar rapido y reintentar en vez de esperar el timeout completo.
+CONNECT_TIMEOUT = int(os.environ.get("CONNECT_TIMEOUT", "15"))
+# Lotes grandes a proposito: comprimido, un lote de 2000 filas son ~130 KB,
+# que sobre el enlace de Red A se transfieren en menos de 2 s. Lo caro no son
+# los bytes sino el viaje de ida y vuelta, asi que conviene hacer pocos
+# viajes grandes en vez de muchos pequenos: 485.000 filas pasan de ~970
+# peticiones a ~240.
+BATCH_SIZE  = int(os.environ.get("BATCH_SIZE",  "2000"))
 REINTENTOS  = int(os.environ.get("REINTENTOS",  "4"))
 ESPERA_BASE = int(os.environ.get("ESPERA_BASE", "5"))   # segundos, se duplica
 
@@ -208,6 +216,13 @@ def extraer_lotes(last_id: int):
 # ─────────────────────────────────────────────
 # ENVIAR AL API SERVER
 # ─────────────────────────────────────────────
+# Una sola sesion para todo el ciclo: mantiene viva la conexion TCP/TLS
+# entre lotes. Sin esto, cada lote rehacia el handshake completo contra
+# Cloudflare -- medido 2,9x mas lento desde la LAN, y desde Red A era peor:
+# los ConnectTimeout del log salian justo de ahi.
+_sesion = requests.Session()
+
+
 def enviar_batch(filas: list[dict]) -> bool:
     """Envia un lote comprimido, con reintentos.
 
@@ -223,7 +238,7 @@ def enviar_batch(filas: list[dict]) -> bool:
 
     for intento in range(1, REINTENTOS + 1):
         try:
-            resp = requests.post(
+            resp = _sesion.post(
                 url,
                 data=cuerpo,
                 headers={
@@ -231,7 +246,7 @@ def enviar_batch(filas: list[dict]) -> bool:
                     "Content-Type": "application/json",
                     "Content-Encoding": "gzip",
                 },
-                timeout=API_TIMEOUT,
+                timeout=(CONNECT_TIMEOUT, API_TIMEOUT),
             )
             resp.raise_for_status()
             return True
