@@ -1,7 +1,7 @@
 "use client";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
-import type { Printer, HistorialRow, PrStatsData, PrStatsUsuarioDetail, AlertaEstado, AlertasStatusMap, SolicitudSuministro } from "@/types";
+import type { Printer, HistorialRow, PrStatsData, PrStatsUsuarioDetail, AlertaEstado, AlertasStatusMap, SolicitudSuministro, InventarioItem } from "@/types";
 import { parsePrinter } from "@/lib/utils";
 
 // ── Estado actual ─────────────────────────────────────────────────────────────
@@ -153,5 +153,53 @@ export function useSendSolicitud() {
       reportado_por: string;
     }) => (await axios.post<{ ok: boolean; id: number }>("/api/py/solicitudes/enviar", body)).data,
     onSuccess: () => qc.invalidateQueries({ queryKey: ["solicitudes"] }),
+  });
+}
+
+// ── Inventario ────────────────────────────────────────────────────────────────
+// Las mutaciones mandan el PIN en la cabecera X-Admin-Pin porque el backend lo
+// valida del lado del servidor: editar el inventario cambia que se monitorea,
+// asi que no alcanza con el candado del frontend.
+
+export const PIN_STORAGE_KEY = "admin_pin";
+
+export function leerPinGuardado(): string {
+  try { return sessionStorage.getItem(PIN_STORAGE_KEY) ?? ""; } catch { return ""; }
+}
+
+export function useInventario() {
+  return useQuery({
+    queryKey: ["inventario"],
+    queryFn: async () => {
+      const { data } = await axios.get<{ items: InventarioItem[] }>("/api/py/inventario");
+      return data.items;
+    },
+    staleTime: 30_000,
+  });
+}
+
+type GuardarArgs = { serie: string; datos: Omit<InventarioItem, "serie" | "updated_at" | "updated_by"> };
+
+export function useGuardarInventario() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ serie, datos }: GuardarArgs) => {
+      await axios.put(`/api/py/inventario/${encodeURIComponent(serie)}`, datos, {
+        headers: { "X-Admin-Pin": leerPinGuardado() },
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["inventario"] }),
+  });
+}
+
+export function useBorrarInventario() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (serie: string) => {
+      await axios.delete(`/api/py/inventario/${encodeURIComponent(serie)}`, {
+        headers: { "X-Admin-Pin": leerPinGuardado() },
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["inventario"] }),
   });
 }

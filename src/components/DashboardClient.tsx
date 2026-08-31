@@ -9,6 +9,7 @@ import Historial from "@/components/pages/Historial";
 import Analiticas from "@/components/pages/Analiticas";
 import Usuarios from "@/components/pages/Usuarios";
 import Solicitudes from "@/components/pages/Solicitudes";
+import Inventario from "@/components/pages/Inventario";
 import { useEstadoData, useRecentHistorial, usePrStats } from "@/hooks/useData";
 import type { Page } from "@/types";
 
@@ -112,6 +113,7 @@ export default function DashboardClient() {
             {page === "analiticas" && <Analiticas  printers={printers} historial={historial} />}
             {page === "usuarios"   && <Usuarios    data={prStats ?? null} />}
             {page === "solicitudes" && <Solicitudes printers={printers} />}
+            {page === "inventario" && <Inventario />}
           </>
         )}
       </main>

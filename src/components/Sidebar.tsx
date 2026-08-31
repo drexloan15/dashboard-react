@@ -11,6 +11,7 @@ const NAV: { id: Page; icon: string; label: string }[] = [
   { id: "analiticas", icon: "◈", label: "Analíticas" },
   { id: "usuarios",    icon: "◉", label: "Usuarios" },
   { id: "solicitudes", icon: "◫", label: "Solicitudes" },
+  { id: "inventario",  icon: "▤", label: "Inventario" },
 ];
 
 interface Props {

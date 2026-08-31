@@ -55,7 +55,23 @@ export interface DashData {
   ts: string;
 }
 
-export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial" | "analiticas" | "usuarios" | "solicitudes";
+export type Page = "overview" | "mapa" | "sedes" | "alertas" | "historial" | "analiticas" | "usuarios" | "solicitudes" | "inventario";
+
+/** Fila del inventario: define QUE impresoras se monitorean.
+ *  El agente descarga esta lista en cada ciclo y reescribe su CSV local. */
+export interface InventarioItem {
+  serie:      string;   // identidad; no se puede cambiar sin borrar y recrear
+  ip:         string;
+  sede:       string;
+  area:       string;
+  zona:       string;
+  modelo:     string;
+  tipo:       string;
+  conexion:   string;
+  activo:     boolean;  // false = sigue en la ficha pero sale del ciclo
+  updated_at: string;
+  updated_by: string;
+}
 
 export interface SolicitudSuministro {
   id:            number;
