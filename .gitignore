@@ -30,3 +30,6 @@ __pycache__/
 # Build artifacts
 tsconfig.tsbuildinfo
 *.tsbuildinfo
+
+# Paquete de despliegue de los agentes (binarios + secretos)
+agent/dist/
