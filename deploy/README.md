@@ -72,10 +72,24 @@ intacta.
 (mejor conservar el anterior que subir basura), lo copia a
 `gdrive:Monitoreo-Backups` y rota a 14 días, local y remoto.
 
-⚠️ `rclone` usa el `client_id` compartido de Google, que se retira durante 2026.
-Cuando deje de funcionar afectará **los dos** respaldos, el de monitoreo y el de
-VANTIO. Se arregla creando un client_id propio:
+⚠️ **Pendiente:** `rclone` usa el `client_id` compartido de Google, que se retira
+durante 2026. Cuando deje de funcionar, los dumps se seguirán generando en disco
+pero **no subirán a Drive** — y afecta a **los dos** respaldos, el de monitoreo y
+el de VANTIO, porque comparten el remoto `gdrive`. Sin copia fuera del servidor,
+un fallo de hardware se lleva todo; es lo que pasó con el 192.168.1.191.
+
+Se arregla creando un client_id propio (gratis, ~10 min):
 https://rclone.org/drive/#making-your-own-client-id
+
+Hay un recordatorio por correo agendado para el **viernes 2026-09-04 a las 8:30**
+hora de Perú (`30 13 4 9 *`, o sea 13:30 UTC):
+
+```
+recordatorio-rclone.py   # se envía una vez y se borra solo del crontab
+```
+
+Se puede probar sin agendar nada ni tocar el cron:
+`python3 recordatorio-rclone.py --prueba`
 
 ## Restaurar la base
 
