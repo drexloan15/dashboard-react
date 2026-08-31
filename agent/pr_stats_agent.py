@@ -104,7 +104,10 @@ _missing = [v for v, k in [("FIREBIRD_DB", FIREBIRD_DB), ("FIREBIRD_PASSWORD", F
                              ("AGENT_API_KEY", API_KEY), ("FIREBIRD_LIB", FIREBIRD_LIB)]
             if not k]
 if _missing:
-    log.error(f"Variables no configuradas en agent.env: {', '.join(m for m, _ in _missing)}")
+    # _missing ya es la lista de NOMBRES; desempaquetarlos como pares hacia
+    # que este propio log.error reventara con ValueError y el agente muriera
+    # sin decir que faltaba.
+    log.error(f"Variables no configuradas en agent.env: {', '.join(_missing)}")
     sys.exit(1)
 
 try:

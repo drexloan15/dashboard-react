@@ -8,14 +8,8 @@ import os
 import sys
 import time
 import logging
-import pandas as pd
-from puresnmp import get
-import puresnmp.exc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-import requests
-
-from api_url import resolve_api_url, ApiUrlError
 
 # ─────────────────────────────────────────────
 # BASE_DIR: funciona tanto como .py como .exe
@@ -24,6 +18,34 @@ if getattr(sys, "frozen", False):
     BASE_DIR = os.path.dirname(sys.executable)
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ─────────────────────────────────────────────
+# LOG TEMPRANO — antes de los imports pesados.
+# Si pandas o puresnmp fallan al cargar (falta una dependencia en el .exe,
+# metadata no empaquetada, etc.) el error tiene que quedar escrito en
+# agente.log. Con el log armado despues, esos fallos no dejaban rastro:
+# la ventana se cerraba y no habia forma de saber que paso.
+# ─────────────────────────────────────────────
+LOG_FILE = os.path.join(BASE_DIR, "agente.log")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+log = logging.getLogger(__name__)
+
+try:
+    import pandas as pd
+    import requests
+    from puresnmp import get
+    import puresnmp.exc
+    from api_url import resolve_api_url, ApiUrlError
+except Exception as _e:
+    logging.getLogger(__name__).exception(f"Error al importar dependencias: {_e}")
+    sys.exit(1)
 
 # ─────────────────────────────────────────────
 # CARGAR VARIABLES DE ENTORNO DESDE agent.env
@@ -60,27 +82,15 @@ INVENTARIO       = os.path.join(BASE_DIR, "inventario2026.csv")
 API_KEY          = os.environ.get("AGENT_API_KEY", "")
 
 if not API_KEY:
-    print("[ERROR] AGENT_API_KEY no configurada en agent.env.")
+    log.error("AGENT_API_KEY no configurada en agent.env "
+              "(el archivo va junto al .exe).")
     sys.exit(1)
 
 API_TIMEOUT      = int(os.environ.get("API_TIMEOUT", "60"))
 SNMP_MAX_WORKERS = int(os.environ.get("SNMP_MAX_WORKERS", "20"))
 SNMP_TIMEOUT     = float(os.environ.get("SNMP_TIMEOUT", "2.0"))
 SNMP_COMMUNITY   = os.environ.get("SNMP_COMMUNITY", "public")
-LOG_FILE         = os.path.join(BASE_DIR, "agente.log")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler()
-    ]
-)
-log = logging.getLogger(__name__)
-
-# Se resuelve despues del logger a proposito: si API_URL_FILE no responde y se
-# cae al cache, ese aviso tiene que quedar en agente.log, no perderse.
 try:
     API_URL = resolve_api_url(BASE_DIR, log)
 except ApiUrlError as _e:
