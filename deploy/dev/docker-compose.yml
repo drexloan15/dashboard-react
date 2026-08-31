@@ -1,0 +1,38 @@
+# Entorno de DESARROLLO local. Solo la base de datos.
+#
+# El backend y el frontend se siguen levantando con iniciar.bat; lo unico que
+# cambia es a que PostgreSQL apuntan. Asi se puede romper lo que sea sin tocar
+# los datos reales del 192.168.1.51.
+#
+# Puerto 5434 a proposito:
+#   5432 -> lo usa vantio-postgres-dev, del otro proyecto en esta misma laptop
+#   5433 -> es el de produccion en el servidor; no reutilizarlo evita confundir
+#           una cadena de conexion con la otra
+#
+# Solo escucha en 127.0.0.1: es una base de desarrollo, no tiene por que
+# quedar expuesta a la red de la oficina.
+name: monitoreo-dev
+
+services:
+  db:
+    image: postgres:16-alpine        # la misma version que produccion
+    container_name: monitoreo-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: lexmark_monitor
+      POSTGRES_USER: lexmark_user
+      # No es un secreto: la base solo escucha en localhost y lleva datos de
+      # prueba. La de produccion tiene otra, y vive en el servidor.
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lexmark_user -d lexmark_monitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pgdata-dev:
