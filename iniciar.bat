@@ -46,9 +46,17 @@ timeout /t 8 /nobreak > nul
 echo [2/2] Iniciando frontend Next.js PRODUCCION (puerto 3000)...
 start "Frontend Next.js PROD" cmd /k "cd /d "%~dp0" && npm start"
 echo.
+rem La IP LAN se detecta sola: estaba fija en 192.168.1.152, que dejo de ser
+rem la de esta maquina. Se pregunta por que interfaz se sale a la red.
+set "LANIP="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(Find-NetRoute -RemoteIPAddress 8.8.8.8)[0].IPAddress" 2^>nul`) do set "LANIP=%%i"
 echo ========================================
 echo   Acceso local : http://localhost:3000
-echo   Acceso LAN   : http://192.168.1.152:3000
+if defined LANIP (
+  echo   Acceso LAN   : http://%LANIP%:3000
+) else (
+  echo   Acceso LAN   : no se pudo detectar la IP de esta maquina
+)
 echo ========================================
 
 :fin
