@@ -13,6 +13,7 @@ Requiere un archivo agent.env en el mismo directorio con:
     DB_PASSWORD=...
 """
 
+import gzip
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -61,6 +62,72 @@ if not DB_CONFIG["password"]:
     raise RuntimeError("DB_PASSWORD no configurada en agent.env.")
 
 app = FastAPI(title="Agente Lexmark API")
+
+
+class GzipRequestMiddleware:
+    """Descomprime los cuerpos que llegan con Content-Encoding: gzip.
+
+    Starlette no lo hace solo: gzip esta estandarizado para RESPUESTAS, no
+    para peticiones, asi que hay que desenvolverlo a mano.
+
+    Importa porque los agentes viven en Red A y suben por un enlace lento:
+    la primera sincronizacion de pr_stats son ~485.000 filas y el JSON crudo
+    pesa ~326 MB. Comprimido baja a ~30 MB (medido con datos realistas, 10,8x
+    -- casi todo el ahorro viene de los 29 nombres de columna repetidos en
+    cada fila). Sin esto los lotes tardaban decenas de segundos y la conexion
+    se caia a mitad de la subida.
+
+    Si el cuerpo no viene comprimido, no toca nada.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        cabeceras = dict(scope["headers"])
+        if cabeceras.get(b"content-encoding", b"").lower() != b"gzip":
+            return await self.app(scope, receive, send)
+
+        crudo = b""
+        while True:
+            mensaje = await receive()
+            crudo += mensaje.get("body", b"")
+            if not mensaje.get("more_body", False):
+                break
+
+        try:
+            cuerpo = gzip.decompress(crudo)
+        except Exception as e:
+            await send({"type": "http.response.start", "status": 400,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body",
+                        "body": f'{{"detail":"cuerpo gzip invalido: {e}"}}'.encode()})
+            return
+
+        # Content-Length ya no corresponde al cuerpo descomprimido, y dejar el
+        # Content-Encoding haria que capas de mas arriba intenten descomprimir
+        # otra vez.
+        limpias = [(k, v) for k, v in scope["headers"]
+                   if k not in (b"content-encoding", b"content-length")]
+        limpias.append((b"content-length", str(len(cuerpo)).encode()))
+        scope = dict(scope, headers=limpias)
+
+        entregado = False
+
+        async def receive_descomprimido():
+            nonlocal entregado
+            if entregado:
+                return {"type": "http.disconnect"}
+            entregado = True
+            return {"type": "http.request", "body": cuerpo, "more_body": False}
+
+        return await self.app(scope, receive_descomprimido, send)
+
+
+app.add_middleware(GzipRequestMiddleware)
 
 
 # ─────────────────────────────────────────────

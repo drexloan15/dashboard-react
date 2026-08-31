@@ -13,8 +13,11 @@ Colocar junto al .exe:
     - pr_stats_agent.log (se crea automatico)
 """
 
+import gzip
+import json
 import os
 import sys
+import time
 import logging
 import traceback
 from datetime import datetime
@@ -96,6 +99,8 @@ except ApiUrlError as _e:
     sys.exit(1)
 API_TIMEOUT = int(os.environ.get("API_TIMEOUT", "120"))
 BATCH_SIZE  = int(os.environ.get("BATCH_SIZE",  "500"))
+REINTENTOS  = int(os.environ.get("REINTENTOS",  "4"))
+ESPERA_BASE = int(os.environ.get("ESPERA_BASE", "5"))   # segundos, se duplica
 
 FECHA_INICIO = os.environ.get("FECHA_INICIO", "2026-04-23")
 
@@ -204,27 +209,54 @@ def extraer_lotes(last_id: int):
 # ENVIAR AL API SERVER
 # ─────────────────────────────────────────────
 def enviar_batch(filas: list[dict]) -> bool:
+    """Envia un lote comprimido, con reintentos.
+
+    Comprimido porque Red A sube por un enlace lento: el JSON de 500 filas
+    pesa ~340 KB y en gzip queda en ~32 KB. El api_server lo desenvuelve.
+
+    Con reintentos porque una sincronizacion completa son ~970 peticiones:
+    abandonar el ciclo al primer tropiezo de red significaba no terminar
+    nunca. Se reintenta con espera creciente antes de darse por vencido.
+    """
     url = f"{API_URL}/pr_stats"
-    try:
-        resp = requests.post(
-            url,
-            json={"filas": filas},
-            headers={"x-api-key": API_KEY},
-            timeout=API_TIMEOUT,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        log.info(f"Batch enviado: {data.get('filas', '?')} filas aceptadas.")
-        return True
-    except requests.exceptions.ConnectionError:
-        log.error("No se pudo conectar con el api_server. Verifica API_URL en agent.env.")
-        return False
-    except requests.exceptions.HTTPError as e:
-        log.error(f"Error HTTP: {e}")
-        return False
-    except Exception as e:
-        log.error(f"Error inesperado al enviar: {e}")
-        return False
+    cuerpo = gzip.compress(json.dumps({"filas": filas}).encode("utf-8"), 6)
+
+    for intento in range(1, REINTENTOS + 1):
+        try:
+            resp = requests.post(
+                url,
+                data=cuerpo,
+                headers={
+                    "x-api-key": API_KEY,
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                },
+                timeout=API_TIMEOUT,
+            )
+            resp.raise_for_status()
+            return True
+        except requests.exceptions.HTTPError as e:
+            # 4xx es culpa del payload: reintentar no lo va a arreglar.
+            codigo = e.response.status_code if e.response is not None else 0
+            if 400 <= codigo < 500:
+                detalle = e.response.text[:300] if e.response is not None else ""
+                log.error(f"El servidor rechazo el lote (HTTP {codigo}): {detalle}")
+                return False
+            motivo = f"HTTP {codigo}"
+        except requests.exceptions.RequestException as e:
+            motivo = f"{type(e).__name__}"
+        except Exception as e:
+            log.error(f"Error inesperado al enviar: {e}")
+            return False
+
+        if intento < REINTENTOS:
+            espera = ESPERA_BASE * (2 ** (intento - 1))
+            log.warning(f"Envio fallido ({motivo}), intento {intento}/{REINTENTOS}. "
+                        f"Reintentando en {espera}s...")
+            time.sleep(espera)
+        else:
+            log.error(f"Envio fallido ({motivo}) tras {REINTENTOS} intentos.")
+    return False
 
 # ─────────────────────────────────────────────
 # MAIN
