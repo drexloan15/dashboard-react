@@ -1,0 +1,82 @@
+name: vantio-monitoreo
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: monitoreo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      # 5432 lo ocupa vantio-postgres-1; este stack usa 5433 en el host.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [monitoreo-net]
+
+  backend:
+    build: ./app/backend
+    container_name: monitoreo-backend
+    restart: unless-stopped
+    env_file: ./backend.env
+    ports:
+      # Solo loopback: el frontend lo alcanza por la red interna, no hace falta exponerlo a la LAN.
+      - "127.0.0.1:8001:8001"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [monitoreo-net]
+
+  frontend:
+    build:
+      context: ./app
+      dockerfile: Dockerfile.frontend
+      args:
+        BACKEND_URL: http://backend:8001
+    container_name: monitoreo-frontend
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://backend:8001
+    ports:
+      # 3000 lo ocupa vantio-retail-back; este stack usa 3001 en el host.
+      - "3001:3000"
+    depends_on:
+      - backend
+    networks: [monitoreo-net]
+
+  # Recibe los datos de los agentes de Red A y los escribe en PostgreSQL.
+  # Unico proceso que escribe en la BD; monitoreo-backend solo lee.
+  # No publica puerto al host: lo alcanza cloudflared por la red interna.
+  apiserver:
+    build: ./app/agent
+    container_name: monitoreo-apiserver
+    restart: unless-stopped
+    env_file: ./agent.env
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [monitoreo-net]
+
+  # Quick tunnel de cloudflared: expone apiserver a Red A, que no comparte
+  # LAN con este servidor. La URL cambia en cada reinicio del contenedor --
+  # se lee del log y se copia al url.txt de las maquinas de Red A.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: monitoreo-cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://apiserver:8000
+    depends_on: [apiserver]
+    networks: [monitoreo-net]
+
+volumes:
+  pgdata:
+
+networks:
+  monitoreo-net:

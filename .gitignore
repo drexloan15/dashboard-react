@@ -27,6 +27,13 @@ agent/inventario2026.csv
 __pycache__/
 *.pyc
 
+# Despliegue: el codigo de configuracion SI se trackea; los secretos reales
+# no. Solo entran las plantillas *.example.
+deploy/.env
+deploy/*.env
+!deploy/*.env.example
+!deploy/env.example
+
 # Build artifacts
 tsconfig.tsbuildinfo
 *.tsbuildinfo
