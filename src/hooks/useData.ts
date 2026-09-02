@@ -1,7 +1,7 @@
 "use client";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import axios from "axios";
-import type { Printer, HistorialRow, PrStatsData, PrStatsUsuarioDetail, AlertaEstado, AlertasStatusMap, SolicitudSuministro, InventarioItem } from "@/types";
+import type { Printer, HistorialRow, PrStatsData, PrStatsUsuarioDetail, AlertaEstado, AlertasStatusMap, SolicitudSuministro, InventarioItem, AnaliticaData } from "@/types";
 import { parsePrinter } from "@/lib/utils";
 
 // ── Estado actual ─────────────────────────────────────────────────────────────
@@ -57,6 +57,21 @@ export function useUsuarioPrStats(userid: string | null) {
     queryFn: async () =>
       (await axios.get<PrStatsUsuarioDetail>(`/api/py/pr_stats/usuario/${encodeURIComponent(userid!)}`)).data,
     staleTime: 300_000,
+  });
+}
+
+// ── Analítica descriptiva y predictiva ────────────────────────────────────────
+// El backend cachea 10 min y refresca en segundo plano, así que esta llamada
+// devuelve al instante. staleTime alineado con esa caché: pedirlo más seguido
+// solo repetiría la misma respuesta.
+
+export function useAnalitica(enabled = true) {
+  return useQuery({
+    queryKey: ["analitica"],
+    enabled,
+    queryFn: async () => (await axios.get<AnaliticaData>("/api/py/analitica")).data,
+    staleTime: 600_000,
+    refetchInterval: 600_000,
   });
 }
 

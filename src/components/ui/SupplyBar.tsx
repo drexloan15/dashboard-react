@@ -1,9 +1,11 @@
 import { nivelColor } from "@/lib/utils";
+import { useTheme } from "@/context/ThemeContext";
 
 export default function SupplyBar({ label, val }: { label: string; val: number | null }) {
   const pct = val === null ? 0 : Math.min(Math.max(val, 0), 100);
   const txt = val === null ? "N/A" : `${val.toFixed(0)}%`;
-  const color = nivelColor(val, "dark");
+  const { theme } = useTheme();
+  const color = nivelColor(val, theme);
 
   return (
     <div className="mb-3">

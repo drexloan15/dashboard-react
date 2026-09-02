@@ -25,12 +25,13 @@ except ImportError:
 import psycopg2
 import psycopg2.extras
 import psycopg2.pool
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
@@ -603,6 +604,7 @@ async def get_historial_page(
     page_size: int = Query(50,  ge=1, le=200),
     search:    str = Query(""),
     sede:      str = Query(""),
+    area:      str = Query(""),
     ip:        str = Query(""),
     estado:    str = Query(""),
     fecha:     str = Query(""),
@@ -613,6 +615,8 @@ async def get_historial_page(
 
     if sede:
         where_parts.append("sede = %s"); params.append(sede)
+    if area:
+        where_parts.append("area = %s"); params.append(area)
     if ip:
         where_parts.append("ip = %s"); params.append(ip)
     if estado:
@@ -636,7 +640,8 @@ async def get_historial_page(
             cur.execute(f"SELECT COUNT(*) AS total FROM historial {where_sql}", params)
             total = cur.fetchone()["total"]
             cur.execute(f"""
-                SELECT serie AS "SERIE", ip AS "IP", sede AS "SEDE", estado AS "ESTADO",
+                SELECT serie AS "SERIE", ip AS "IP", sede AS "SEDE",
+                       COALESCE(area, '') AS "AREA", estado AS "ESTADO",
                        contador AS "CONTADOR",
                        {sc},
                        timestamp::text AS "TIMESTAMP", fecha::text AS "FECHA",
@@ -1015,6 +1020,583 @@ async def get_usuario_jobs(userid: str):
         return {"userid": userid, "jobs": jobs, "por_dia": por_dia, "por_tipo": por_tipo}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ── ANALITICA: DESCRIPTIVA Y PREDICTIVA ───────────────────────────────────────
+#
+# Todo lo de esta seccion sale de pr_stats (trabajos de impresion), no de
+# historial (SNMP). El motivo es de datos, no de gusto:
+#
+#   historial  -> arranco el 2026-08-31. El servidor 192.168.1.191 murio el
+#                 2026-08-28 y se llevo el historico entero. Un toner dura
+#                 semanas: con unos pocos dias de lecturas no se ha observado
+#                 ni un ciclo completo, asi que no hay nada que extrapolar.
+#   pr_stats   -> ~495 mil trabajos desde el 2026-04-23, y de buena calidad
+#                 (0 nulos en numpages y site, 0.6% sin serialnumber).
+#
+# Codigos de finalaction, que es la columna que decide si una pagina llego al
+# papel:  P = impresa | C = cancelada | E = expirada (enviada y nunca liberada)
+#         D = borrada.  Solo P se imprime; C, E y D son papel que nadie recogio.
+#
+# RENDIMIENTO -- por que esta escrito asi:
+#
+#   1. Una sola pasada por tabla. La version ingenua sacaba totales, sedes,
+#      meses, dia-de-semana y color/duplex con una consulta cada una: cinco
+#      escaneos de 187 MB para responder lo mismo. Aqui se agrega UNA vez por
+#      (fecha, sede) -- 266 filas -- y de ahi se derivan todas en Python.
+#   2. Seq scan a proposito. El WHERE toca el 97% de la tabla; forzar el indice
+#      de submitdate seria mas lento, no mas rapido. El indice si trabaja en la
+#      consulta de la ventana de 28 dias, que es la unica selectiva.
+#   3. Nunca en el event loop. psycopg2 es bloqueante: un `async def` que
+#      consulta la BD congela TODAS las peticiones mientras dura. El calculo
+#      completo son ~560 ms, que bloquearian el backend entero. Por eso corre en
+#      un hilo aparte y el endpoint solo sirve cache ya calentada.
+#   4. Stale-while-revalidate. Si la cache vencio se devuelve la vieja y se
+#      refresca de fondo, en vez de hacer esperar a quien pregunto.
+
+# Fecha en que el sistema entro en produccion real. Antes hay dos pilotos
+# (2024-03 a 2024-07 y 2025-03 a 2025-08) con 1-4 usuarios y ~3 mil trabajos al
+# mes; desde el 2026-04-23 son 230+ usuarios y ~112 mil al mes. Mezclarlos hace
+# que cualquier modelo lea el dia del despliegue como una tendencia de negocio.
+PR_REGIMEN_INICIO = os.getenv("PR_REGIMEN_INICIO", "2026-04-23")
+
+# Ventana de la tasa de consumo por impresora, en dias NATURALES. Se divide
+# entre dias naturales y no entre dias con actividad: una impresora que no
+# trabaja domingos gasta menos por dia de calendario, y el calendario es lo que
+# hay que predecir.
+VENTANA_CONSUMO_D = 28
+
+# Semanas que mira la linea base del pronostico de volumen.
+PRONOSTICO_SEMANAS = 8
+
+# Rendimiento asumido por suministro, en paginas.
+#
+# NO son valores medidos: son estimaciones para poder ordenar por urgencia
+# mientras historial acumula lecturas reales. Sustituir por el rendimiento del
+# fabricante por modelo en cuanto se tenga.
+#
+# Dentro de un mismo suministro el ORDEN no depende de estos numeros, porque son
+# un factor de escala comun a todas las impresoras. Los dias absolutos si. Por
+# eso cada fila viaja marcada con el metodo que se uso para calcularla.
+RENDIMIENTO_PAGINAS = {
+    "TONER_NEGRO":        6000, "TONER_CIAN":         6000,
+    "TONER_MAGENTA":      6000, "TONER_AMARILLO":     6000,
+    "FOTO_NEGRO":        40000, "FOTO_CIAN":         40000,
+    "FOTO_MAGENTA":      40000, "FOTO_AMARILLO":     40000,
+    "REVELADOR_NEGRO":   40000, "KIT_MANTENIMIENTO": 150000,
+    "KIT_FUSOR":        150000, "CONTENEDOR_DESECHO": 30000,
+}
+
+DOW_NOMBRE = {1: "Lunes", 2: "Martes", 3: "Miercoles", 4: "Jueves",
+              5: "Viernes", 6: "Sabado", 7: "Domingo"}
+
+ANA_CACHE_TTL   = 600     # 10 min; los datos que resume son diarios
+_ana_cache: dict          = {}
+_ana_cache_ts:  float     = 0.0
+_ana_lock                 = threading.Lock()
+
+
+def _mediana(valores: list[float]) -> float:
+    """Mediana, no media, y a proposito: la distribucion de paginas por trabajo
+    tiene mediana 2 y maximo 6900, asi que un solo manual largo desplaza el
+    promedio de una sede entera."""
+    if not valores:
+        return 0.0
+    s = sorted(valores)
+    n = len(s)
+    m = n // 2
+    return float(s[m]) if n % 2 else (s[m - 1] + s[m]) / 2.0
+
+
+def _pronostico_por_dow(serie: dict[str, float], objetivo: list,
+                        semanas: int = PRONOSTICO_SEMANAS) -> list[dict]:
+    """Linea base: cada dia se predice con la MEDIANA de los ultimos `semanas`
+    mismos dias de la semana.
+
+    Es deliberadamente simple. Con ~22 semanas de datos no alcanza para entrenar
+    nada complejo sin sobreajustar, y la estacionalidad semanal aqui es enorme
+    (el domingo cae al 12% de un dia normal y el sabado se trabaja al 72%), asi
+    que este modelo es dificil de batir. Y hace falta de todos modos: sin un
+    piso de comparacion no hay forma de saber si un modelo mas caro aporta algo.
+
+    La mediana sobre 8 semanas absorbe sola un feriado suelto; no hace falta un
+    calendario de feriados para que la linea base se sostenga.
+
+    `serie` es {fecha ISO -> paginas}. Devuelve una fila por dia de `objetivo`.
+    """
+    por_dow: dict[int, list] = defaultdict(list)
+    for f_iso, v in serie.items():
+        por_dow[date.fromisoformat(f_iso).isoweekday()].append((f_iso, v))
+    for lista in por_dow.values():
+        lista.sort()
+
+    salida = []
+    for d in objetivo:
+        previos = [v for f_iso, v in por_dow.get(d.isoweekday(), [])
+                   if f_iso < d.isoformat()]
+        muestra = previos[-semanas:]
+        salida.append({
+            "fecha":     d.isoformat(),
+            "dow":       d.isoweekday(),
+            "nombre":    DOW_NOMBRE[d.isoweekday()],
+            "paginas":   round(_mediana(muestra)),
+            "muestra_n": len(muestra),
+        })
+    return salida
+
+
+def _backtest(serie: dict[str, float], dias_prueba: int = 14) -> dict:
+    """Valida el pronostico contra los ultimos `dias_prueba` dias reales.
+
+    Particion CRONOLOGICA, nunca aleatoria: en una serie temporal, partir al
+    azar entrena con el futuro para adivinar el pasado y devuelve metricas
+    excelentes y falsas.
+
+    MAE  = error medio en paginas.
+    MAPE = error medio en %. Se saltan los dias de volumen casi nulo (domingos,
+           feriados) porque dividir entre casi cero infla el porcentaje sin que
+           eso signifique nada sobre la calidad del modelo.
+    """
+    fechas = sorted(serie.keys())
+    if len(fechas) < dias_prueba + PRONOSTICO_SEMANAS * 7:
+        return {"suficiente": False, "requiere_dias": dias_prueba + PRONOSTICO_SEMANAS * 7,
+                "tiene_dias": len(fechas)}
+
+    prueba = fechas[-dias_prueba:]
+    pred   = _pronostico_por_dow(serie, [date.fromisoformat(f) for f in prueba])
+
+    errores, pcts = [], []
+    for p in pred:
+        real = serie.get(p["fecha"], 0.0)
+        errores.append(abs(real - p["paginas"]))
+        if real >= 100:
+            pcts.append(abs(real - p["paginas"]) / real * 100)
+
+    return {
+        "suficiente": True,
+        "dias":       dias_prueba,
+        "mae":        round(sum(errores) / len(errores)) if errores else 0,
+        "mape":       round(sum(pcts) / len(pcts), 1) if pcts else None,
+        "mape_n":     len(pcts),
+    }
+
+
+def _dias_restantes(nivel_pct: float, pag_dia: float, rendimiento: int):
+    """Dias hasta agotar un suministro, por el puente paginas -> consumo.
+
+    No se observa el nivel bajar (para eso harian falta meses de historial): se
+    estima el gasto a partir de las paginas que esa impresora imprime de verdad,
+    que si estan en pr_stats desde abril.
+
+        %/dia = paginas_dia / rendimiento * 100
+        dias  = nivel_actual / (%/dia)
+    """
+    if pag_dia <= 0 or rendimiento <= 0:
+        return None
+    pct_dia = pag_dia / rendimiento * 100.0
+    return nivel_pct / pct_dia if pct_dia > 0 else None
+
+
+def _consultar_analitica(conn) -> dict:
+    """Las cuatro consultas. Bloqueante: llamar siempre desde un hilo.
+
+    Cuatro y no once. Dos escaneos completos (el agregado diario y el de
+    usuarios), uno parcial de 28 dias que si aprovecha pr_stats_submit_idx, y
+    una lectura trivial de estado_actual. Medido en produccion: 318 + 89 + 153
+    ms + ruido.
+    """
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
+    cur.execute("SELECT to_regclass('public.pr_stats')")
+    row = cur.fetchone()
+    if row is None or row["to_regclass"] is None:
+        return {"exists": False}
+
+    # ── 1. Agregado diario x sede real x entorno LPM: la unica pasada completa
+    #
+    # OJO con pr_stats.site: NO es una ubicacion. Son dos entornos de LPM, y los
+    # dos contienen impresoras de las 16 sedes reales -- las mismas impresoras
+    # aparecen en ambos. Peor todavia, uno de esos entornos se llama "VENEZUELA"
+    # y existe ademas una sede llamada VENEZUELA que no es lo mismo. Agrupar por
+    # site y llamarlo "sede" produce comparaciones que no significan nada.
+    #
+    # La ubicacion de verdad esta en inventario (sede, zona, area), que se
+    # mantiene desde el dashboard. Se cruza por serie: inventario.serie =
+    # pr_stats.serialnumber, que empareja 113 de 119 impresoras.
+    #
+    # El LEFT JOIN cuesta ~76 ms sobre los 318 de la version sin cruce: es un
+    # hash join contra una tabla de 115 filas y encima habilita paralelismo.
+    # Barato para dejar de medir sobre una dimension equivocada.
+    #
+    # Lo NO impreso se parte en tres por releasemethod, no por finalaction.
+    #
+    # Motivo para no usar finalaction: se deriva de releasemethod y le pone
+    # etiquetas distintas segun el entorno -- el MISMO evento sale como 'C' en un
+    # entorno y como 'E' en el otro. releasemethod es consistente en los dos.
+    #
+    # Las tres causas, y lo que respalda cada nombre:
+    #   T = sin liberar. Es la mayoria. Solo consta que no llego al papel; su
+    #       finaldate viene copiado del submitdate en los 47 mil casos, asi que
+    #       no dice cuanto espero, y ademas se comporta distinto en cada entorno
+    #       (en uno consta quien lo libero, en el otro no). La CAUSA es
+    #       desconocida: no llamarla "no recogida" ni cosas por el estilo.
+    #   A = expirada. Aqui si hay evidencia: mediana 48.47 h y p95 48.96 h -- un
+    #       temporizador de retencion de 48 h -- y ni uno solo tiene registrado
+    #       quien lo libero, ni IP ni equipo. Nadie los toco nunca.
+    #   U = eliminada. Mediana 23 min y SIEMPRE consta quien lo libero: alguien
+    #       identificado actuo sobre el trabajo.
+    #
+    # Y ninguna de las tres es "desperdicio": si no se imprimio, no se gasto
+    # papel ni toner. Es un indicador operativo, no un costo. El papel gastado de
+    # verdad serian los duplicados, y NO se pueden medir aqui: printjobname es
+    # generico (PDFServlet 23 mil veces, "document" 18 mil, formularios
+    # recurrentes), asi que no distingue un reenvio accidental de un formato que
+    # se imprime a diario.
+    cur.execute("""
+        SELECT p.submitdate::date::text                                        AS fecha,
+               COALESCE(i.sede, '(fuera de inventario)')                       AS sede,
+               COALESCE(i.zona, '')                                            AS zona,
+               COALESCE(p.site, '')                                            AS lpm,
+               COUNT(*)                                                        AS trabajos,
+               COALESCE(SUM(p.numpages), 0)                                    AS paginas,
+               COALESCE(SUM(p.numpages) FILTER (WHERE p.finalaction   = 'P'), 0) AS impresas,
+               COALESCE(SUM(p.numpages) FILTER (WHERE p.releasemethod = 'T'), 0) AS sin_liberar,
+               COALESCE(SUM(p.numpages) FILTER (WHERE p.releasemethod = 'A'), 0) AS expiradas,
+               COALESCE(SUM(p.numpages) FILTER (WHERE p.releasemethod = 'U'), 0) AS eliminadas,
+               COALESCE(SUM(p.numpages) FILTER (
+                   WHERE p.finalaction = 'P' AND p.printjobcolor  = 'Y'), 0)   AS color,
+               COALESCE(SUM(p.numpages) FILTER (
+                   WHERE p.finalaction = 'P' AND p.printjobduplex = 'Y'), 0)   AS duplex
+        FROM pr_stats p
+        LEFT JOIN inventario i ON i.serie = p.serialnumber
+        WHERE p.submitdate >= %s AND p.numpages > 0
+        GROUP BY 1, 2, 3, 4
+    """, (PR_REGIMEN_INICIO,))
+    # Sin ORDER BY a proposito. Ordenar aqui obliga a PostgreSQL a ordenar las
+    # 495 mil filas ANTES de agregar (GroupAggregate en vez de HashAggregate):
+    # medido, 617 ms contra 318. Lo que hay que ordenar son las ~2 mil filas del
+    # resultado, y eso sale gratis en Python.
+    diario = [dict(r) for r in cur.fetchall()]
+
+    # ── 2. Por usuario: sin LIMIT, para contar usuarios distintos sin otra
+    #      pasada. Son ~660 filas, cabe de sobra en memoria.
+    cur.execute("""
+        SELECT COALESCE(userid, '')                                          AS userid,
+               COALESCE(SUM(numpages) FILTER (WHERE finalaction =  'P'), 0)  AS impresas,
+               COALESCE(SUM(numpages) FILTER (WHERE finalaction <> 'P'), 0)  AS no_impresas,
+               COUNT(*)                FILTER (WHERE finalaction <> 'P')     AS trabajos_no_impresos
+        FROM pr_stats
+        WHERE submitdate >= %s AND numpages > 0
+        GROUP BY 1
+    """, (PR_REGIMEN_INICIO,))
+    usuarios = [dict(r) for r in cur.fetchall()]
+
+    # ── 3. Volumen por impresora en la ventana movil. Esta si es selectiva
+    #      (~20% de la tabla) y usa el indice de submitdate.
+    cur.execute("""
+        SELECT serialnumber                                AS serie,
+               COALESCE(SUM(numpages), 0)::float / %s      AS pag_dia,
+               COUNT(DISTINCT submitdate::date)            AS dias_activos
+        FROM pr_stats
+        WHERE submitdate >= CURRENT_DATE - %s::int
+          AND numpages > 0 AND finalaction = 'P'
+          AND COALESCE(serialnumber, '') <> ''
+        GROUP BY 1
+    """, (VENTANA_CONSUMO_D, VENTANA_CONSUMO_D))
+    consumo = {r["serie"]: {"pag_dia": float(r["pag_dia"]),
+                            "dias_activos": int(r["dias_activos"])}
+               for r in cur.fetchall()}
+
+    # ── 4. Estado actual: 115 filas. La union con pr_stats es por serie
+    #      (estado_actual.serie = pr_stats.serialnumber); cruzan 113 de 119.
+    #      NO se usa serie_snmp: hoy esta vacia en el 100% de las filas.
+    sc = ", ".join(f'{c.lower()} AS "{c}"' for c in SUPPLY_COLS)
+    cur.execute(f"""
+        SELECT serie, ip,
+               COALESCE(sede, '')       AS sede,
+               COALESCE(area, '')       AS area,
+               COALESCE(modelo_inv, '') AS modelo,
+               COALESCE(estado, '')     AS estado,
+               {sc}
+        FROM estado_actual
+    """)
+    equipos = [dict(r) for r in cur.fetchall()]
+
+    return {"exists": True, "diario": diario, "usuarios": usuarios,
+            "consumo": consumo, "equipos": equipos}
+
+
+def _derivar_descriptiva(diario: list[dict], usuarios: list[dict]) -> dict:
+    """Deriva todas las vistas descriptivas del agregado diario, en memoria.
+
+    Son ~2 mil filas: agregarlas en Python cuesta milisegundos y ahorra cuatro
+    escaneos de 187 MB contra PostgreSQL.
+
+    VOCABULARIO -- importa, porque la version anterior de esto mentia.
+
+    Un trabajo o llego al papel o no llego. Nada mas. Lo que NO llego al papel
+    NO es "desperdicio": si no se imprimio, no se gasto papel ni toner. Es un
+    indicador operativo (cuanta friccion hay entre pedir una impresion y
+    obtenerla), no un indicador de costo. Nombrarlo como costo llevo a afirmar
+    que se tiraban 50 mil paginas al mes, y no se tira ninguna.
+
+      impresas     -> finalaction 'P'. Salio en papel.
+      sin_liberar  -> releasemethod 'T'. No salio. Causa DESCONOCIDA: su
+                      finaldate viene copiado del submitdate, y se comporta
+                      distinto en cada entorno de LPM. No inventarle una causa.
+      expiradas    -> releasemethod 'A'. No salio, y aqui si hay evidencia de por
+                      que: mediana 48.47 h con p95 48.96 h (retencion de 48 h) y
+                      ni uno tiene registrado quien lo libero. Nadie lo toco.
+      eliminadas   -> releasemethod 'U'. No salio; mediana 23 min y siempre
+                      consta quien lo libero. Alguien identificado actuo.
+
+    Las etiquetas 'C' (cancelada) y 'E' (expirada) de finalaction NO se usan: son
+    el mismo hecho con dos nombres, uno por entorno. Comprobado -- cada valor de
+    releasemethod produce exactamente un finalaction, sin una sola excepcion en
+    495 mil trabajos, que es como se ve un campo derivado y no un hecho medido.
+    """
+    CAMPOS = ("trabajos", "paginas", "impresas", "sin_liberar", "expiradas",
+              "eliminadas", "color", "duplex")
+    tot   = dict.fromkeys(CAMPOS, 0)
+    sedes: dict[str, dict] = {}
+    zonas: dict[str, dict] = {}
+    lpms:  dict[str, dict] = {}
+    meses: dict[str, dict] = {}
+    dows:  dict[int, dict] = {}
+    serie_global: dict[str, float] = defaultdict(float)
+    serie_sede:   dict[str, dict]  = defaultdict(lambda: defaultdict(float))
+
+    for r in diario:
+        f_iso = r["fecha"]
+        vals  = {k: int(r[k]) for k in CAMPOS}
+        for k, v in vals.items():
+            tot[k] += v
+
+        for grupo, clave in ((sedes, r["sede"]), (zonas, r["zona"] or "(sin zona)"),
+                             (lpms,  r["lpm"] or "(sin entorno)")):
+            acc = grupo.setdefault(clave, dict.fromkeys(CAMPOS, 0))
+            for k, v in vals.items():
+                acc[k] += v
+
+        no_imp = vals["sin_liberar"] + vals["expiradas"] + vals["eliminadas"]
+        m = meses.setdefault(f_iso[:7], {"impresas": 0, "no_impresas": 0})
+        m["impresas"]    += vals["impresas"]
+        m["no_impresas"] += no_imp
+
+        dow = date.fromisoformat(f_iso).isoweekday()
+        d = dows.setdefault(dow, {"impresas": 0, "dias": set()})
+        d["impresas"] += vals["impresas"]
+        d["dias"].add(f_iso)
+
+        serie_global[f_iso] += float(vals["impresas"])
+        serie_sede[r["sede"]][f_iso] += float(vals["impresas"])
+
+    def _pct(parte: int, total: int) -> float:
+        return round(100.0 * parte / total, 1) if total else 0.0
+
+    tot["no_impresas"]     = tot["sin_liberar"] + tot["expiradas"] + tot["eliminadas"]
+    tot["pct_no_impresas"] = _pct(tot["no_impresas"], tot["paginas"])
+    tot["usuarios"]        = sum(1 for u in usuarios if u["userid"])
+    tot["dias"]            = len(serie_global)
+    tot["desde"]           = min(serie_global) if serie_global else None
+    tot["hasta"]           = max(serie_global) if serie_global else None
+
+    def _filas(grupo: dict, etiqueta: str) -> list[dict]:
+        salida = []
+        for nombre, g in sorted(grupo.items(), key=lambda kv: -kv[1]["paginas"]):
+            no_imp = g["sin_liberar"] + g["expiradas"] + g["eliminadas"]
+            salida.append({
+                etiqueta: nombre, **{k: g[k] for k in CAMPOS},
+                "no_impresas": no_imp,
+                "pct_no_impresas": _pct(no_imp, g["paginas"]),
+            })
+        return salida
+
+    # Aqui se trabaja SABADO (72% de un dia normal): un calendario laboral
+    # generico lunes-viernes modelaria mal una porcion grande del volumen.
+    por_dow = [{"dow": k, "nombre": DOW_NOMBRE[k], "impresas": v["impresas"],
+                "dias": len(v["dias"]),
+                "promedio": round(v["impresas"] / len(v["dias"])) if v["dias"] else 0}
+               for k, v in sorted(dows.items())]
+
+    por_mes = [{"mes": k, "impresas": v["impresas"], "no_impresas": v["no_impresas"],
+                "pct_no_impresas": _pct(v["no_impresas"], v["impresas"] + v["no_impresas"])}
+               for k, v in sorted(meses.items())]
+
+    # Usuarios cuyos envios acaban mas veces sin imprimirse. No es una lista de
+    # culpables de nada: puede ser que su flujo de liberacion falle.
+    top = sorted((u for u in usuarios if u["userid"] and int(u["no_impresas"]) > 0),
+                 key=lambda u: -int(u["no_impresas"]))[:25]
+    top_no_impresas = [{
+        "userid": u["userid"], "no_impresas": int(u["no_impresas"]),
+        "impresas": int(u["impresas"]),
+        "trabajos_no_impresos": int(u["trabajos_no_impresos"]),
+        "pct": _pct(int(u["no_impresas"]), int(u["no_impresas"]) + int(u["impresas"])),
+    } for u in top]
+
+    return {
+        "descriptiva": {
+            "totales": tot,
+            "por_sede": _filas(sedes, "sede"),
+            "por_zona": _filas(zonas, "zona"),
+            # Los dos entornos de LPM. No son ubicaciones: se exponen aparte solo
+            # para que se vea de donde salen las expiradas y eliminadas, que
+            # existen en uno y no en el otro.
+            "por_lpm":  _filas(lpms, "entorno"),
+            "por_mes": por_mes, "por_dow": por_dow,
+            "top_no_impresas": top_no_impresas,
+            "modo": {"color": tot["color"], "mono": tot["impresas"] - tot["color"],
+                     "duplex": tot["duplex"], "simplex": tot["impresas"] - tot["duplex"],
+                     "pct_color":  _pct(tot["color"],  tot["impresas"]),
+                     "pct_duplex": _pct(tot["duplex"], tot["impresas"])},
+        },
+        "_series": {"global": dict(serie_global),
+                    "sedes": {k: dict(v) for k, v in serie_sede.items()}},
+    }
+
+
+def _derivar_predictiva(series: dict, consumo: dict, equipos: list[dict]) -> dict:
+    """Pronostico de volumen y agotamiento de suministros."""
+    hoy = date.today()
+    horizonte = [hoy + timedelta(days=i) for i in range(1, 15)]
+
+    volumen = {
+        "horizonte_dias": len(horizonte),
+        "global": {"pronostico": _pronostico_por_dow(series["global"], horizonte),
+                   "backtest":   _backtest(series["global"])},
+        "sedes": {sede: {"pronostico": _pronostico_por_dow(s, horizonte),
+                         "backtest":   _backtest(s)}
+                  for sede, s in series["sedes"].items()},
+    }
+
+    suministros, sin_volumen = [], 0
+    for e in equipos:
+        c = consumo.get(e["serie"])
+        pag_dia = c["pag_dia"] if c else 0.0
+        if not c:
+            sin_volumen += 1
+        for col in SUPPLY_COLS:
+            nivel = e.get(col)
+            if nivel is None:
+                continue
+            nivel = float(nivel)
+            if nivel > 60:          # por encima de 60% no hay nada que decidir
+                continue
+            dias = _dias_restantes(nivel, pag_dia, RENDIMIENTO_PAGINAS.get(col, 6000))
+            suministros.append({
+                "serie": e["serie"], "ip": e["ip"], "sede": e["sede"],
+                "area": e["area"], "modelo": e["modelo"], "estado": e["estado"],
+                "suministro": col,
+                "etiqueta":   SUMINISTROS_LABELS.get(col, col),
+                "nivel":      round(nivel, 1),
+                "pag_dia":    round(pag_dia, 1),
+                # "volumen"   -> estimado con las paginas reales de esa impresora.
+                # "sin_datos" -> no aparece en pr_stats en la ventana. No se le
+                #                inventa una tasa: se marca y se manda al final.
+                #                (La version anterior aplicaba en silencio un
+                #                0.8%/dia fijo, que no era una prediccion.)
+                "metodo":     "volumen" if pag_dia > 0 else "sin_datos",
+                "dias":       round(dias, 1) if dias is not None else None,
+                "agotamiento": (hoy + timedelta(days=int(min(dias, 3650)))).isoformat()
+                               if dias is not None else None,
+            })
+
+    # Los sin estimacion van al final: son los que no se pueden ordenar, no los
+    # menos urgentes.
+    suministros.sort(key=lambda s: (s["dias"] is None, s["dias"] or 0))
+
+    return {
+        "volumen": volumen,
+        "suministros": {
+            "items": suministros[:200], "total": len(suministros),
+            "equipos_sin_volumen": sin_volumen,
+            "ventana_dias": VENTANA_CONSUMO_D,
+            "rendimientos": RENDIMIENTO_PAGINAS,
+            "nota": ("Los dias se estiman con las paginas reales de cada impresora "
+                     "(pr_stats) y un rendimiento asumido por suministro, porque "
+                     "historial todavia no tiene recorrido para medir el consumo. "
+                     "El ORDEN dentro de un mismo suministro es fiable; los dias "
+                     "absolutos son una estimacion."),
+        },
+    }
+
+
+def _cargar_analitica() -> dict:
+    """Recalcula el paquete completo. BLOQUEANTE: solo desde un hilo."""
+    with get_db() as conn:
+        crudo = _consultar_analitica(conn)
+    if not crudo.get("exists"):
+        return {"exists": False}
+
+    desc = _derivar_descriptiva(crudo["diario"], crudo["usuarios"])
+    pred = _derivar_predictiva(desc.pop("_series"), crudo["consumo"], crudo["equipos"])
+
+    return {
+        "exists": True,
+        "generado": datetime.now().isoformat(timespec="seconds"),
+        "regimen": {
+            "desde": PR_REGIMEN_INICIO,
+            "nota": ("pr_stats tiene filas desde 2024, pero son dos pilotos con 1-4 "
+                     "usuarios. La produccion real arranca el 2026-04-23 y solo eso "
+                     "se usa aqui: mezclarlas haria leer el dia del despliegue como "
+                     "una tendencia de negocio."),
+        },
+        **desc,
+        "predictiva": pred,
+    }
+
+
+def _refrescar_analitica() -> None:
+    """Refresco en hilo. El lock evita que varias peticiones que llegan con la
+    cache vencida disparen el mismo calculo a la vez."""
+    global _ana_cache, _ana_cache_ts
+    if not _ana_lock.acquire(blocking=False):
+        return
+    try:
+        datos = _cargar_analitica()
+        _ana_cache, _ana_cache_ts = datos, time.time()
+    except Exception as e:
+        logging.warning("analitica: fallo el refresco: %s", e)
+    finally:
+        _ana_lock.release()
+
+
+@app.get("/analitica")
+async def get_analitica():
+    """Analitica descriptiva y predictiva sobre pr_stats.
+
+    Nunca bloquea el event loop: si hay cache la devuelve al instante y refresca
+    de fondo cuando toca; y el primer calculo, si la cache aun esta fria, se va a
+    un hilo con run_in_threadpool en vez de congelar el resto de la API los
+    ~560 ms que dura.
+    """
+    if _ana_cache:
+        if time.time() - _ana_cache_ts >= ANA_CACHE_TTL:
+            threading.Thread(target=_refrescar_analitica, daemon=True).start()
+        return _ana_cache
+    try:
+        await run_in_threadpool(_refrescar_analitica)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    if not _ana_cache:
+        raise HTTPException(status_code=503, detail="Analitica no disponible todavia")
+    return _ana_cache
+
+
+def _ana_loop() -> None:
+    """Precalienta la cache al arrancar y la refresca cada ANA_CACHE_TTL, para
+    que ninguna peticion pague los ~560 ms del calculo.
+
+    Si la cache sigue vacia reintenta cada 30 s en vez de cada 10 min: al
+    arrancar tras un corte de luz PostgreSQL puede tardar ~48 s en aceptar
+    conexiones, y no tiene sentido dejar la analitica muerta 10 minutos por eso.
+    """
+    while True:
+        _refrescar_analitica()
+        time.sleep(30 if not _ana_cache else ANA_CACHE_TTL)
+
+
+threading.Thread(target=_ana_loop, daemon=True).start()
+
 
 @app.get("/health")
 async def health():

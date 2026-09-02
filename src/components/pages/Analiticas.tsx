@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import Card from "@/components/ui/Card";
+import AnaliticaTrabajos from "@/components/AnaliticaTrabajos";
 import type { Printer, HistorialRow } from "@/types";
 import { toNum } from "@/lib/utils";
 import { SUMINISTROS } from "@/types";
@@ -266,6 +267,25 @@ export default function Analiticas({
       <h1 className="page-title text-[22px] font-extrabold mb-6 dark:text-dark-text text-light-text">
         Analíticas
       </h1>
+
+      {/* Analítica sobre TRABAJOS DE IMPRESIÓN (pr_stats): ~495 mil registros
+          desde 2026-04-23. Va primero porque es la que tiene datos suficientes
+          para sostener una afirmación. */}
+      <AnaliticaTrabajos />
+
+      {/* Analítica sobre CONTADORES SNMP (historial). Se agrega en el navegador
+          y arrancó el 2026-08-31: el servidor 192.168.1.191 murió el 2026-08-28
+          y se llevó el histórico. Va a ganar valor conforme acumule semanas. */}
+      <div className="mt-8 mb-4 pt-6 border-t dark:border-dark-border border-light-border">
+        <h2 className="text-[15px] font-extrabold dark:text-dark-text text-light-text">
+          Contadores SNMP
+        </h2>
+        <p className="text-[10px] dark:text-dark-muted text-light-muted mt-1">
+          Lecturas directas de las impresoras. El histórico se reinició el
+          2026-08-31, así que estas cifras cubren un período corto todavía.
+        </p>
+      </div>
+
       <div className="flex flex-col gap-6">
 
         {/* Barra de control: periodo + fecha inicio */}

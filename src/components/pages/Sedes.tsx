@@ -6,6 +6,7 @@ import SupplyBar from "@/components/ui/SupplyBar";
 import { SUMINISTROS } from "@/types";
 import type { Printer, HistorialRow } from "@/types";
 import { toNum, nivelColor } from "@/lib/utils";
+import { useTheme } from "@/context/ThemeContext";
 
 function Dot({ estado }: { estado: string }) {
   const on = estado === "Online";
@@ -103,6 +104,7 @@ function IPDetail({ p, onBack, onBackSede, sede, historialByIp }: { p: Printer; 
 }
 
 function SedeList({ printers, sede, onSelectIP, onBack, historialByIp }: { printers: Printer[]; sede: string; onSelectIP: (ip: string) => void; onBack: () => void; historialByIp: Map<string, HistorialRow[]> }) {
+  const { theme } = useTheme();
   const zona = printers[0]?.ZONA || "";
   return (
     <div>
@@ -147,9 +149,9 @@ function SedeList({ printers, sede, onSelectIP, onBack, historialByIp }: { print
                   <div key={m.col} className="flex items-center gap-1 mb-1">
                     <span className="text-[9px] dark:text-dark-muted text-light-muted w-24 shrink-0">{m.label}</span>
                     <div className="w-16 h-[3px] dark:bg-dark-border2 bg-light-border2 rounded-full overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${Math.min(m.v, 100)}%`, background: nivelColor(m.v, "dark") }} />
+                      <div className="h-full rounded-full" style={{ width: `${Math.min(m.v, 100)}%`, background: nivelColor(m.v, theme) }} />
                     </div>
-                    <span className="text-[9px] font-semibold" style={{ color: nivelColor(m.v, "dark") }}>{m.v.toFixed(0)}%</span>
+                    <span className="text-[9px] font-semibold" style={{ color: nivelColor(m.v, theme) }}>{m.v.toFixed(0)}%</span>
                   </div>
                 )) : <span className="text-[10px] dark:text-dark-muted text-light-muted">Sin datos</span>}
               </div>
@@ -163,6 +165,7 @@ function SedeList({ printers, sede, onSelectIP, onBack, historialByIp }: { print
 }
 
 export default function Sedes({ printers, historial = [] }: { printers: Printer[]; historial?: HistorialRow[] }) {
+  const { theme } = useTheme();
   const [sedeSel, setSedeSel] = useState<string | null>(null);
   const [ipSel, setIpSel] = useState<string | null>(null);
 
@@ -243,7 +246,7 @@ export default function Sedes({ printers, historial = [] }: { printers: Printer[
               {worstVal < Infinity && (
                 <p className="text-[9px]">
                   <span className="dark:text-dark-muted text-light-muted">Peor: </span>
-                  <span className="font-bold" style={{ color: nivelColor(worstVal, "dark") }}>
+                  <span className="font-bold" style={{ color: nivelColor(worstVal, theme) }}>
                     {worstLabel} {worstVal.toFixed(0)}%
                   </span>
                 </p>

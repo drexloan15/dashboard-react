@@ -30,6 +30,7 @@ export interface HistorialRow {
   FECHA?: string;
   IP: string;
   SEDE?: string;
+  AREA?: string;
   ESTADO?: string;
   CONTADOR?: string | number;
   TONER_NEGRO?: string | number;
@@ -153,3 +154,121 @@ export const COORDS_SEDES: Record<string, [number, number]> = {
   TARMA:         [-11.423235125703798, -75.69220405346923],
   TRUJILLO:      [-8.142236564373668,  -79.01440715906142],
 };
+
+// ── ANALÍTICA (endpoint /analitica) ───────────────────────────────────────────
+// Todo esto se calcula en el backend sobre pr_stats. No se agrega en el
+// navegador a propósito: son ~495 mil trabajos, no pueden viajar hasta acá.
+
+// Un trabajo o llegó al papel o no llegó. Lo que no llegó NO es "desperdicio":
+// si no se imprimió, no se gastó papel ni tóner. Es un indicador operativo
+// —cuánta fricción hay entre pedir una impresión y obtenerla— no uno de costo.
+
+export interface AnaTotales {
+  trabajos: number; paginas: number;
+  /** Llegó al papel. */
+  impresas: number;
+  /** No llegó al papel. Suma de las tres causas de abajo. */
+  no_impresas: number;
+  /** Causa DESCONOCIDA. Es la mayoría. Solo consta que no se imprimió: su
+   *  finaldate viene copiado del submitdate, y se comporta distinto en cada
+   *  entorno de LPM. No inventarle una causa. */
+  sin_liberar: number;
+  /** Retención de 48 h agotada y nadie lo tocó nunca — sin usuario, IP ni
+   *  equipo de liberación registrados. Esto sí está comprobado. */
+  expiradas: number;
+  /** Alguien identificado actuó sobre el trabajo (mediana 23 min). */
+  eliminadas: number;
+  color: number; duplex: number;
+  pct_no_impresas: number;
+  usuarios: number; dias: number;
+  desde: string | null; hasta: string | null;
+}
+
+/** Fila de cualquier desglose (sede, zona o entorno LPM). La clave que la
+ *  identifica cambia de nombre según la dimensión. */
+export interface AnaGrupo {
+  sede?: string; zona?: string; entorno?: string;
+  trabajos: number; paginas: number; impresas: number; no_impresas: number;
+  sin_liberar: number; expiradas: number; eliminadas: number;
+  color: number; duplex: number;
+  pct_no_impresas: number;
+}
+
+export interface AnaDow {
+  dow: number; nombre: string; impresas: number; dias: number; promedio: number;
+}
+
+export interface AnaMes {
+  mes: string; impresas: number; no_impresas: number; pct_no_impresas: number;
+}
+
+export interface AnaUsuarioNoImpresas {
+  userid: string; no_impresas: number; impresas: number;
+  trabajos_no_impresos: number; pct: number;
+}
+
+export interface AnaPronosticoDia {
+  fecha: string; dow: number; nombre: string; paginas: number; muestra_n: number;
+}
+
+export interface AnaBacktest {
+  suficiente: boolean;
+  dias?: number; mae?: number; mape?: number | null; mape_n?: number;
+  requiere_dias?: number; tiene_dias?: number;
+}
+
+export interface AnaSerie {
+  pronostico: AnaPronosticoDia[];
+  backtest: AnaBacktest;
+}
+
+export interface AnaSuministro {
+  serie: string; ip: string; sede: string; area: string;
+  modelo: string; estado: string;
+  suministro: string; etiqueta: string;
+  nivel: number; pag_dia: number;
+  /** "volumen" = estimado con las páginas reales de esa impresora.
+   *  "sin_datos" = no aparece en pr_stats; no se le inventa una tasa. */
+  metodo: "volumen" | "sin_datos";
+  dias: number | null;
+  agotamiento: string | null;
+}
+
+export interface AnaliticaData {
+  exists: boolean;
+  generado?: string;
+  regimen?: { desde: string; nota: string };
+  descriptiva?: {
+    totales: AnaTotales;
+    /** Sede REAL, del inventario (cruce por serie). No confundir con el `site`
+     *  de LPM: ese no es una ubicación — ver por_lpm. */
+    por_sede: AnaGrupo[];
+    por_zona: AnaGrupo[];
+    /** Los dos entornos de LPM. NO son ubicaciones: cada uno contiene impresoras
+     *  de las 16 sedes, y las mismas impresoras aparecen en ambos. Se expone
+     *  solo para ver de dónde salen las expiradas y eliminadas. */
+    por_lpm: AnaGrupo[];
+    por_mes: AnaMes[];
+    por_dow: AnaDow[];
+    top_no_impresas: AnaUsuarioNoImpresas[];
+    modo: {
+      color: number; mono: number; duplex: number; simplex: number;
+      pct_color: number; pct_duplex: number;
+    };
+  };
+  predictiva?: {
+    volumen: {
+      horizonte_dias: number;
+      global: AnaSerie;
+      sedes: Record<string, AnaSerie>;
+    };
+    suministros: {
+      items: AnaSuministro[];
+      total: number;
+      equipos_sin_volumen: number;
+      ventana_dias: number;
+      rendimientos: Record<string, number>;
+      nota: string;
+    };
+  };
+}

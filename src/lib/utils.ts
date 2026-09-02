@@ -9,12 +9,21 @@ export function toNum(v: unknown): number | null {
   return isNaN(n) ? null : n;
 }
 
+/**
+ * Color del nivel de un suministro.
+ *
+ * El parametro `theme` existia pero se descartaba con `void theme`, asi que en
+ * modo claro se pintaban los tonos pensados para fondo oscuro. El amarillo
+ * #e0b030 sobre una tarjeta blanca da un contraste de ~1.9:1 — practicamente
+ * ilegible. En claro se usan variantes mas oscuras del mismo tono: se mantiene
+ * el codigo de color (rojo/ambar/verde) y se recupera la lectura.
+ */
 export function nivelColor(v: number | null, theme: "dark" | "light"): string {
-  void theme;
-  if (v === null) return "#4e6070";
-  if (v <= 10) return "#f04545";
-  if (v <= 30) return "#e0b030";
-  return "#20c97a";
+  const claro = theme === "light";
+  if (v === null) return claro ? "#6c757d" : "#4e6070";
+  if (v <= 10)    return claro ? "#c92a2a" : "#f04545";
+  if (v <= 30)    return claro ? "#9a6700" : "#e0b030";
+  return            claro ? "#0f7a48" : "#20c97a";
 }
 
 export function parsePrinter(r: Printer) {

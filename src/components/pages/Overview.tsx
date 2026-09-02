@@ -28,6 +28,7 @@ function useCountUp(target: number, duration = 900): number {
 import { SUMINISTROS } from "@/types";
 import type { Printer, HistorialRow } from "@/types";
 import { toNum, nivelColor } from "@/lib/utils";
+import { useTheme } from "@/context/ThemeContext";
 import PredSection from "@/components/PredSection";
 
 interface Props { printers: Printer[]; historial: HistorialRow[]; }
@@ -87,6 +88,7 @@ function GaugeSVG({ value, color }: { value: number; color: string }) {
 
 /* ── Componente principal ────────────────────────────────────────────────── */
 export default function Overview({ printers, historial }: Props) {
+  const { theme } = useTheme();
   const [sedeScale, setSedeScale] = useState<"auto" | "log">("auto");
   const total = printers.length;
 
@@ -107,15 +109,17 @@ export default function Overview({ printers, historial }: Props) {
       totalCrit += crit;
       totalBajo += bajo;
       const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
-      cards.push({ label, avg, crit, bajo, color: nivelColor(avg, "dark") });
+      cards.push({ label, avg, crit, bajo, color: nivelColor(avg, theme) });
     }
 
     const saludGlobal = totalReadings ? Math.round(okReadings / totalReadings * 100) : 0;
     return { totalCrit, totalBajo, tiposAfectados, saludGlobal, supplyCards: cards };
-  }, [printers]);
+  }, [printers, theme]);
 
   const { totalCrit, totalBajo, tiposAfectados, saludGlobal, supplyCards } = supplyMetrics;
-  const gaugeColor = saludGlobal >= 80 ? "#20c97a" : saludGlobal >= 50 ? "#e0b030" : "#f04545";
+  const gaugeColor = theme === "light"
+    ? (saludGlobal >= 80 ? "#0f7a48" : saludGlobal >= 50 ? "#9a6700" : "#c92a2a")
+    : (saludGlobal >= 80 ? "#20c97a" : saludGlobal >= 50 ? "#e0b030" : "#f04545");
 
   // Equipos por sede + top tóner — un único scan sobre printers
   const { sedeData, tonerData } = useMemo(() => {
@@ -307,7 +311,7 @@ export default function Overview({ printers, historial }: Props) {
                     return (
                       <div style={ttStyle} className="p-2 shadow-lg z-50 relative">
                         <div style={ttLabel} className="mb-1.5">{data.ip}</div>
-                        <div className="text-[11px] font-bold mb-1" style={{ color: nivelColor(data.v, "dark") }}>
+                        <div className="text-[11px] font-bold mb-1" style={{ color: nivelColor(data.v, theme) }}>
                           {data.v.toFixed(0)}% Tóner Negro
                         </div>
                         <div className="text-[9px] text-gray-300 mt-1.5">Sede: <span className="text-gray-200 font-medium">{data.sede}</span></div>
@@ -320,7 +324,7 @@ export default function Overview({ printers, historial }: Props) {
               />
               <Bar dataKey="v" radius={[3, 3, 0, 0]}>
                 {tonerData.map((d, i) => (
-                  <Cell key={i} fill={nivelColor(d.v, "dark")} />
+                  <Cell key={i} fill={nivelColor(d.v, theme)} />
                 ))}
               </Bar>
             </BarChart>
@@ -362,7 +366,7 @@ export default function Overview({ printers, historial }: Props) {
         </div>
       </Card>
 
-      <PredSection printers={printers} historial={historial} />
+      <PredSection />
     </div>
   );
 }

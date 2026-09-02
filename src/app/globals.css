@@ -7,16 +7,30 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+html.dark  { color-scheme: dark;  }
+html.light { color-scheme: light; }
+
 body {
   font-family: 'Inter', sans-serif;
   -webkit-font-smoothing: antialiased;
+  /* Sin esto el <body> queda transparente y el overscroll (o cualquier zona no
+     cubierta por el wrapper) muestra el blanco por defecto del navegador. */
+  background: #07090f;
+  color: #d0dce8;
+}
+html.light body {
+  background: #f8f9fa;
+  color: #212529;
 }
 
 /* Scrollbar thin */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #1a2535; border-radius: 3px; }
-.light ::-webkit-scrollbar-thumb { background: #dee2e6; }
+html.light ::-webkit-scrollbar-thumb { background: #dee2e6; }
+/* Firefox no entiende ::-webkit-*; scrollbar-color si. */
+html       { scrollbar-color: #1a2535 transparent; scrollbar-width: thin; }
+html.light { scrollbar-color: #dee2e6 transparent; }
 
 /* ── Gauge SVG ── */
 @keyframes arcFill {
@@ -43,6 +57,9 @@ body {
 .kpi-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 12px 36px rgba(0,0,0,0.45) !important;
+}
+html.light .kpi-card:hover {
+  box-shadow: 0 10px 28px rgba(33,37,41,0.12) !important;
 }
 .supply-bar {
   animation: barGrow 0.9s cubic-bezier(.22,.68,0,1) both;
@@ -80,6 +97,10 @@ body {
 .kpi-card:hover::after {
   opacity: 1;
   animation: shimmer 0.7s ease forwards;
+}
+/* En claro el brillo blanco sobre tarjeta blanca no se ve: se invierte. */
+html.light .kpi-card::after {
+  background: linear-gradient(105deg, transparent 40%, rgba(33,37,41,0.05) 50%, transparent 60%);
 }
 
 /* ── Animaciones de entrada de página ── */

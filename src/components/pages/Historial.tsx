@@ -5,14 +5,14 @@ import { useHistorialPage } from "@/hooks/useData";
 import type { Printer } from "@/types";
 
 const ALL_COLS = [
-  "TIMESTAMP", "FECHA", "IP", "SEDE", "ESTADO", "CONTADOR",
+  "TIMESTAMP", "FECHA", "IP", "SEDE", "AREA", "ESTADO", "CONTADOR",
   "TONER_NEGRO", "TONER_CIAN", "TONER_MAGENTA", "TONER_AMARILLO",
   "FOTO_NEGRO", "FOTO_CIAN", "FOTO_MAGENTA", "FOTO_AMARILLO",
   "REVELADOR_NEGRO", "KIT_MANTENIMIENTO", "KIT_FUSOR", "CONTENEDOR_DESECHO",
 ];
 
 const LABEL: Record<string, string> = {
-  TIMESTAMP: "Timestamp", FECHA: "Fecha", IP: "IP", SEDE: "Sede",
+  TIMESTAMP: "Timestamp", FECHA: "Fecha", IP: "IP", SEDE: "Sede", AREA: "Área",
   ESTADO: "Estado", CONTADOR: "Contador",
   TONER_NEGRO: "T.Negro", TONER_CIAN: "T.Cián", TONER_MAGENTA: "T.Magenta", TONER_AMARILLO: "T.Amarillo",
   FOTO_NEGRO: "F.Negro", FOTO_CIAN: "F.Cián", FOTO_MAGENTA: "F.Magenta", FOTO_AMARILLO: "F.Amarillo",
@@ -23,6 +23,7 @@ const LABEL: Record<string, string> = {
 export default function Historial({ printers }: { printers: Printer[] }) {
   const [search, setSearch]       = useState("");
   const [filterSede, setSede]     = useState("");
+  const [filterArea, setArea]     = useState("");
   const [filterEstado, setEstado] = useState("");
   const [filterIP, setIP]         = useState("");
   const [filterFecha, setFecha]   = useState("");
@@ -34,20 +35,29 @@ export default function Historial({ printers }: { printers: Printer[] }) {
     () => Array.from(new Set(printers.map(p => p.SEDE).filter(Boolean))).sort(),
     [printers]
   );
-  const ips = useMemo(() => {
+  // Áreas e IPs se acotan a la sede elegida: un área de otra sede no daría
+  // resultados y solo ensucia el desplegable.
+  const areas = useMemo(() => {
     const list = filterSede ? printers.filter(p => p.SEDE === filterSede) : printers;
-    return Array.from(new Set(list.map(p => p.IP))).sort();
+    return Array.from(new Set(list.map(p => p.AREA).filter(Boolean))).sort();
   }, [printers, filterSede]);
+
+  const ips = useMemo(() => {
+    const list = printers.filter(p =>
+      (!filterSede || p.SEDE === filterSede) && (!filterArea || p.AREA === filterArea));
+    return Array.from(new Set(list.map(p => p.IP))).sort();
+  }, [printers, filterSede, filterArea]);
 
   const params = useMemo(() => {
     const p = new URLSearchParams({ page: String(page + 1), page_size: "50" });
     if (deferredSearch) p.set("search", deferredSearch);
     if (filterSede)     p.set("sede",   filterSede);
+    if (filterArea)     p.set("area",   filterArea);
     if (filterEstado)   p.set("estado", filterEstado);
     if (filterIP)       p.set("ip",     filterIP);
     if (filterFecha)    p.set("fecha",  filterFecha);
     return p;
-  }, [page, deferredSearch, filterSede, filterEstado, filterIP, filterFecha]);
+  }, [page, deferredSearch, filterSede, filterArea, filterEstado, filterIP, filterFecha]);
 
   const { data, isLoading } = useHistorialPage(params);
 
@@ -75,9 +85,13 @@ export default function Historial({ printers }: { printers: Printer[] }) {
             placeholder="Buscar texto..."
             className={`${selectCls} w-44`}
           />
-          <select value={filterSede} onChange={e => { setSede(e.target.value); setIP(""); resetPage(); }} className={selectCls}>
+          <select value={filterSede} onChange={e => { setSede(e.target.value); setArea(""); setIP(""); resetPage(); }} className={selectCls}>
             <option value="">Todas las sedes</option>
             {sedes.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select value={filterArea} onChange={e => { setArea(e.target.value); setIP(""); resetPage(); }} className={selectCls}>
+            <option value="">Todas las áreas</option>
+            {areas.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
           <select value={filterIP} onChange={e => { setIP(e.target.value); resetPage(); }} className={selectCls}>
             <option value="">Todas las IPs</option>
@@ -93,9 +107,9 @@ export default function Historial({ printers }: { printers: Printer[] }) {
             onChange={e => { setFecha(e.target.value); resetPage(); }}
             className={selectCls}
           />
-          {(search || filterSede || filterIP || filterEstado || filterFecha) && (
+          {(search || filterSede || filterArea || filterIP || filterEstado || filterFecha) && (
             <button
-              onClick={() => { setSearch(""); setSede(""); setIP(""); setEstado(""); setFecha(""); resetPage(); }}
+              onClick={() => { setSearch(""); setSede(""); setArea(""); setIP(""); setEstado(""); setFecha(""); resetPage(); }}
               className="px-3 py-1.5 rounded-lg text-[12px] text-brand-red border border-brand-red/30 hover:bg-brand-red/10 transition-colors cursor-pointer">
               Limpiar filtros
             </button>
