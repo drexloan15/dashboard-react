@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import Card from "@/components/ui/Card";
+import AccessibleTooltip from "@/components/ui/AccessibleTooltip";
 import { useAnalitica } from "@/hooks/useData";
 import { useTheme } from "@/context/ThemeContext";
 import { nivelColor } from "@/lib/utils";
@@ -24,19 +25,6 @@ const COLOR_DIAS = (d: number | null) =>
   : d <= 7    ? "#ff9800"
   : d <= 14   ? "#e0b030"
   :             "#20c97a";
-
-function Etiqueta({ children, title }: { children: React.ReactNode; title: string }) {
-  return (
-    <span
-      title={title}
-      className="cursor-help text-brand-blue text-[12px] bg-brand-blue/10 w-4 h-4
-                 flex items-center justify-center rounded-full leading-none"
-      aria-label="Información metodológica"
-    >
-      {children}
-    </span>
-  );
-}
 
 export default function PredSection() {
   const { data, isLoading, isError } = useAnalitica();
@@ -68,7 +56,7 @@ export default function PredSection() {
         <p className="text-[10px] font-bold dark:text-dark-muted text-light-muted uppercase tracking-widest mb-2">
           Predicción agotamiento
         </p>
-        <p className="text-[12px] dark:text-dark-muted text-light-muted">
+        <p role={isError ? "alert" : "status"} aria-live={isError ? "assertive" : "polite"} className="text-[12px] dark:text-dark-muted text-light-muted">
           {isLoading ? "Calculando…" : "Analítica no disponible."}
         </p>
       </Card>
@@ -99,16 +87,22 @@ Las filas marcadas "sin volumen" no aparecen en pr_stats — no se les inventa u
         <div className="flex items-center gap-3 flex-wrap">
           <p className="text-[10px] font-bold dark:text-dark-muted text-light-muted uppercase tracking-widest flex items-center gap-1.5">
             Predicción agotamiento
-            <Etiqueta title={METODO}>ⓘ</Etiqueta>
+            <AccessibleTooltip
+              content={METODO}
+              label="Información sobre la metodología de predicción"
+              className="cursor-help text-brand-blue text-[12px] bg-brand-blue/10 w-4 h-4 flex items-center justify-center rounded-full leading-none"
+            >
+              ⓘ
+            </AccessibleTooltip>
           </p>
           <div className="flex items-center gap-2">
-            <select value={filtroSede} onChange={e => setFiltroSede(e.target.value)}
-              className="text-[10px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded px-1.5 py-0.5 dark:text-dark-text outline-none cursor-pointer">
+            <select aria-label="Filtrar predicción por sede" value={filtroSede} onChange={e => setFiltroSede(e.target.value)}
+              className="text-[10px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded px-1.5 py-0.5 dark:text-dark-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
               <option value="Todas">Todas las sedes</option>
               {sedes.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            <select value={filtroSum} onChange={e => setFiltroSum(e.target.value)}
-              className="text-[10px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded px-1.5 py-0.5 dark:text-dark-text outline-none cursor-pointer">
+            <select aria-label="Filtrar predicción por suministro" value={filtroSum} onChange={e => setFiltroSum(e.target.value)}
+              className="text-[10px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded px-1.5 py-0.5 dark:text-dark-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
               <option value="Todos">Todos los suministros</option>
               {tipos.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
@@ -161,10 +155,12 @@ Las filas marcadas "sin volumen" no aparecen en pr_stats — no se les inventa u
                   </td>
                   <td className="py-2 px-3 text-right dark:text-dark-muted text-light-muted">
                     {sin ? (
-                      <span title="Esta impresora no registra trabajos en pr_stats en la ventana. Sin volumen no hay tasa de consumo que estimar."
-                            className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10 cursor-help">
+                      <AccessibleTooltip
+                        content="Esta impresora no registra trabajos en pr_stats en la ventana. Sin volumen no hay tasa de consumo que estimar."
+                        className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded bg-black/10 dark:bg-white/10 cursor-help"
+                      >
                         sin volumen
-                      </span>
+                      </AccessibleTooltip>
                     ) : p.pag_dia.toFixed(0)}
                   </td>
                   <td className="py-2 px-3 dark:text-dark-muted text-light-muted text-[10px] font-mono">
@@ -184,9 +180,22 @@ Las filas marcadas "sin volumen" no aparecen en pr_stats — no se les inventa u
         </table>
       </div>
 
+      {/* Antes esta tabla se cortaba en 60 filas sin avisar, mientras los
+          badges de arriba y el texto de abajo mostraban otros dos números
+          distintos (el total filtrado y el total global sin filtrar) — con
+          168 suministros reales ya se ocultaban 108 sin ningún indicio. Ver
+          correcciones/funcional.md, hallazgo #4. */}
+      {filtrados.length > 60 && (
+        <p role="status" className="mt-2 text-[10px] text-orange-500 font-semibold">
+          Mostrando 60 de {filtrados.length}. Filtra por sede o suministro para ver el resto.
+        </p>
+      )}
+
       <p className="mt-2 text-[9px] dark:text-dark-muted text-light-muted leading-relaxed">
-        {sum.total} suministros por debajo del 60 % · consumo medido sobre los últimos{" "}
-        {sum.ventana_dias} días · {sum.equipos_sin_volumen} equipos sin trabajos en pr_stats.
+        Mostrando {Math.min(filtrados.length, 60)} de {filtrados.length} suministros
+        {filtrados.length !== sum.total && ` (${sum.total} en total antes de filtrar)`}
+        {" "}· consumo medido sobre los últimos {sum.ventana_dias} días ·{" "}
+        {sum.equipos_sin_volumen} equipos sin trabajos en pr_stats.
         Los días son una estimación; el orden dentro de cada suministro no depende del
         rendimiento asumido.
       </p>

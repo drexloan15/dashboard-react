@@ -1,6 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import Card from "@/components/ui/Card";
+import AccessibleTooltip from "@/components/ui/AccessibleTooltip";
 import { useAnalitica } from "@/hooks/useData";
 
 // Analítica sobre pr_stats (trabajos de impresión), calculada en el backend.
@@ -52,12 +53,12 @@ export default function AnaliticaTrabajos() {
   }, [pv, sedeSel]);
 
   if (isLoading) {
-    return <Card><p className="text-[12px] dark:text-dark-muted text-light-muted">Calculando analítica…</p></Card>;
+    return <Card><p role="status" aria-live="polite" className="text-[12px] dark:text-dark-muted text-light-muted">Calculando analítica…</p></Card>;
   }
   if (isError || !data?.exists || !d || !pv || !serie) {
     return (
       <Card>
-        <p className="text-[12px] dark:text-dark-muted text-light-muted">
+        <p role="alert" className="text-[12px] dark:text-dark-muted text-light-muted">
           Analítica de trabajos no disponible (pr_stats sin datos).
         </p>
       </Card>
@@ -80,12 +81,13 @@ export default function AnaliticaTrabajos() {
           hasta <span className="font-bold dark:text-dark-text text-light-text">{t.hasta}</span>{" "}
           ({t.dias} días · {N(t.trabajos)} trabajos · {t.usuarios} usuarios)
         </span>
-        <span
-          title={data.regimen?.nota}
+        <AccessibleTooltip
+          content={data.regimen?.nota ?? "Información sobre el período usado por la analítica."}
+          label="Información sobre el período de analítica"
           className="px-2 py-0.5 rounded bg-brand-blue/10 text-brand-blue font-bold cursor-help"
         >
           ⓘ desde {data.regimen?.desde}
-        </span>
+        </AccessibleTooltip>
       </div>
 
       {/* KPIs */}
@@ -124,28 +126,32 @@ export default function AnaliticaTrabajos() {
             </thead>
             <tbody className="divide-y dark:divide-dark-border divide-light-border">
               {d.por_sede.map(s => {
-                // Muy por encima de la media global: merece una mirada, no es ruido.
-                const alto  = s.pct_no_impresas >= t.pct_no_impresas * 1.5;
+                // Muy por encima de la media global Y con volumen suficiente
+                // para que el porcentaje signifique algo: una sede con pocas
+                // paginas puede superar 1.5x la media por pura casualidad
+                // estadistica (un solo trabajo cancelado en 10 paginas ya es
+                // un porcentaje enorme). Ver correcciones/funcional.md, #8.
+                const alto  = s.paginas >= 1000 && s.pct_no_impresas >= t.pct_no_impresas * 1.5;
                 const fuera = s.sede === "(fuera de inventario)";
                 return (
                   <tr key={s.sede} className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
                     <td className="py-2 pr-3 font-medium dark:text-dark-text text-light-text">
                       {s.sede}
                       {fuera && (
-                        <span
-                          title="Impresoras que registran trabajos en LPM pero no están en el inventario. No se monitorean por SNMP ni entran en la predicción de suministros."
+                        <AccessibleTooltip
+                          content="Impresoras que registran trabajos en LPM pero no están en el inventario. No se monitorean por SNMP ni entran en la predicción de suministros."
                           className="ml-1.5 text-[9px] bg-orange-500/15 text-orange-500 px-1.5 py-0.5 rounded font-bold uppercase cursor-help"
                         >
                           ⚠ sin inventariar
-                        </span>
+                        </AccessibleTooltip>
                       )}
                       {alto && !fuera && (
-                        <span
-                          title={`Más del 150% de la media global (${t.pct_no_impresas}%).`}
+                        <AccessibleTooltip
+                          content={`Más del 150% de la media global (${t.pct_no_impresas}%).`}
                           className="ml-1.5 text-[9px] bg-red-500/15 text-brand-red px-1.5 py-0.5 rounded font-bold uppercase cursor-help"
                         >
                           ▲ atípico
-                        </span>
+                        </AccessibleTooltip>
                       )}
                     </td>
                     <td className="py-2 px-2 text-right dark:text-dark-muted text-light-muted">{N(s.paginas)}</td>
@@ -308,10 +314,18 @@ export default function AnaliticaTrabajos() {
           <h2 className="text-[13px] font-bold dark:text-dark-text text-light-text uppercase tracking-wider">
             Pronóstico de volumen — próximos {pv.horizonte_dias} días
           </h2>
-          <select value={sedeSel} onChange={e => setSedeSel(e.target.value)}
-            className="text-[10px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded px-1.5 py-0.5 dark:text-dark-text outline-none cursor-pointer">
+          <select aria-label="Seleccionar sede para el pronóstico de volumen" value={sedeSel} onChange={e => setSedeSel(e.target.value)}
+            className="text-[10px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded px-1.5 py-0.5 dark:text-dark-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
             <option value="global">Todas las sedes</option>
-            {Object.keys(pv.sedes).sort().map(s => <option key={s} value={s}>{s}</option>)}
+            {/* "(fuera de inventario)" es la bolsa sintetica de trabajos sin
+                impresora asociada, no una sede real -- ya se marca como tal en
+                la tabla de arriba, pero aca no habia forma de distinguirla, y
+                al empezar con "(" ordenaba primero. Ver
+                correcciones/funcional.md, hallazgo #5. */}
+            {Object.keys(pv.sedes)
+              .filter(s => s !== "(fuera de inventario)")
+              .sort()
+              .map(s => <option key={s} value={s}>{s}</option>)}
           </select>
         </div>
         <p className="text-[10px] dark:text-dark-muted text-light-muted mb-3">
@@ -361,9 +375,14 @@ export default function AnaliticaTrabajos() {
                   <td className="py-2 pr-3 font-mono dark:text-dark-text text-light-text">{p.fecha}</td>
                   <td className="py-2 px-2 dark:text-dark-muted text-light-muted">{p.nombre}</td>
                   <td className="py-2 px-2 text-right font-bold text-brand-blue">{N(p.paginas)}</td>
-                  <td className="py-2 px-2 text-right dark:text-dark-muted text-light-muted"
-                      title="Cuántos mismos días de la semana entraron en la mediana">
-                    {p.muestra_n}
+                  <td className="py-2 px-2 text-right dark:text-dark-muted text-light-muted">
+                    <AccessibleTooltip
+                      content="Cuántos mismos días de la semana entraron en la mediana"
+                      label={`${p.muestra_n} días incluidos en la muestra. Más información`}
+                      className="cursor-help rounded px-1"
+                    >
+                      {p.muestra_n}
+                    </AccessibleTooltip>
                   </td>
                   <td className="py-2 pl-2"><Barra pct={(p.paginas / maxPron) * 100} /></td>
                 </tr>

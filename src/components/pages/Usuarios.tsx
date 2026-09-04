@@ -83,7 +83,7 @@ function UsuarioDetail({ userid, onBack }: { userid: string; onBack: () => void 
       <p className="text-[12px] dark:text-dark-muted text-light-muted mb-6">Historial de trabajos de impresión</p>
 
       {loading && (
-        <Card><p className="text-[12px] dark:text-dark-muted text-light-muted">Cargando...</p></Card>
+        <Card><p role="status" aria-live="polite" className="text-[12px] dark:text-dark-muted text-light-muted">Cargando...</p></Card>
       )}
 
       {!loading && detail && (
@@ -117,16 +117,16 @@ function UsuarioDetail({ userid, onBack }: { userid: string; onBack: () => void 
               </h2>
               <div className="flex items-center gap-2 text-[11px] flex-wrap">
                 {/* Filtro tipo */}
-                <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}
-                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer">
+                <select aria-label="Filtrar trabajos por tipo" value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)}
+                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
                   <option value="todos">Todos los tipos</option>
                   <option value="p">Impresión</option>
                   <option value="c">Copia</option>
                   <option value="d">Cancelado</option>
                 </select>
                 {/* Ordenar */}
-                <select value={ordenar} onChange={e => setOrdenar(e.target.value as typeof ordenar)}
-                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer">
+                <select aria-label="Ordenar trabajos" value={ordenar} onChange={e => setOrdenar(e.target.value as typeof ordenar)}
+                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
                   <option value="fecha_desc">Más reciente</option>
                   <option value="fecha_asc">Más antiguo</option>
                   <option value="paginas_desc">Mayor páginas</option>
@@ -134,11 +134,11 @@ function UsuarioDetail({ userid, onBack }: { userid: string; onBack: () => void 
                 </select>
                 {/* Filtro fecha */}
                 <span className="dark:text-dark-muted text-light-muted">Desde</span>
-                <input type="date" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
-                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer" />
+                <input type="date" aria-label="Fecha inicial" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
+                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue" />
                 <span className="dark:text-dark-muted text-light-muted">Hasta</span>
-                <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
-                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer" />
+                <input type="date" aria-label="Fecha final" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
+                  className="text-[11px] dark:bg-dark-surface bg-white border dark:border-dark-border border-light-border rounded px-2 py-1 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue" />
                 {(fechaDesde || fechaHasta || filtroTipo !== "todos") && (
                   <button onClick={() => { setFechaDesde(""); setFechaHasta(""); setFiltroTipo("todos"); setOrdenar("fecha_desc"); }}
                     className="text-[10px] text-brand-red cursor-pointer hover:underline bg-transparent border-none">
@@ -274,7 +274,7 @@ export default function Usuarios({ data }: { data: PrStatsData | null }) {
       <div className="page-body">
         <h1 className="page-title text-[22px] font-extrabold mb-6 dark:text-dark-text text-light-text">Usuarios</h1>
         <Card>
-          <p className="text-[12px] dark:text-dark-muted text-light-muted">
+          <p role="status" aria-live="polite" className="text-[12px] dark:text-dark-muted text-light-muted">
             {data === null ? "Cargando datos de impresión..." : "Sin datos. Verifica que el agente pr_stats esté corriendo en el Servidor A."}
           </p>
         </Card>

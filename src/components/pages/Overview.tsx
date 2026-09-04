@@ -151,13 +151,16 @@ export default function Overview({ printers, historial }: Props) {
     const dayStrs = Array.from(new Set(dh.map(r => r._tsD.toDateString()))).slice(-7);
 
     const alert: number[] = [], crit: number[] = [], low: number[] = [], types: number[] = [], health: number[] = [];
+    const latestPerIp = new Map<string, typeof dh[number]>();
+    let cursor = 0;
 
     for (const dStr of dayStrs) {
       const limitTime = new Date(dStr).setHours(23, 59, 59, 999);
 
-      const latestPerIp = new Map<string, any>();
-      for (const r of dh) {
-        if (r._tsD.getTime() <= limitTime) latestPerIp.set(r.IP, r);
+      while (cursor < dh.length && dh[cursor]._tsD.getTime() <= limitTime) {
+        const row = dh[cursor];
+        latestPerIp.set(row.IP, row);
+        cursor++;
       }
 
       let dCrit = 0, dBajo = 0, dReadings = 0, dOk = 0;
@@ -165,7 +168,7 @@ export default function Overview({ printers, historial }: Props) {
 
       for (const p of latestPerIp.values()) {
         for (const [col, label] of SUMINISTROS) {
-          const val = toNum(p[col]);
+          const val = toNum((p as unknown as Record<string, unknown>)[col]);
           if (val !== null) {
             dReadings++;
             if (val > 30) dOk++;

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import Sidebar from "@/components/Sidebar";
 import Overview from "@/components/pages/Overview";
 import Mapa from "@/components/pages/Mapa";
@@ -19,8 +19,9 @@ export default function DashboardClient() {
   const [estados, setEstados] = useState(["Online", "Offline"]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
 
-  const { data: estadoData, isLoading, isError } = useEstadoData();
+  const { data: estadoData, isLoading, isError, refetch } = useEstadoData();
 
   // Historial reciente: 30 días para overview/sedes, 365 para analíticas
   const needsHistorial = page === "overview" || page === "sedes" || page === "analiticas";
@@ -29,22 +30,36 @@ export default function DashboardClient() {
 
   const { data: prStats } = usePrStats(page === "usuarios");
 
+  // Todos los equipos, SIN el filtro de Zona/Estado del Sidebar. Ese filtro
+  // representa "quiero ver esto ahora mismo" y tiene sentido para Overview,
+  // Mapa y Alertas -- pero Historial, Sedes y Analiticas muestran datos
+  // HISTORICOS, donde un equipo offline hoy puede ser justo el que se quiere
+  // auditar, y una sede entera desaparecia de esas paginas sin ningun aviso
+  // con solo destildar un checkbox en una pagina distinta. Ver
+  // correcciones/funcional.md, hallazgo #1.
+  const allPrinters = estadoData?.estado ?? [];
+
   const printers = useMemo(
     () =>
-      (estadoData?.estado ?? []).filter(p => {
+      allPrinters.filter(p => {
         const zonaOk   = !zonas.length  || !p.ZONA  || zonas.includes(p.ZONA);
         const estadoOk = !estados.length || estados.includes(p.ESTADO);
         return zonaOk && estadoOk;
       }),
-    [estadoData?.estado, zonas, estados]
+    [allPrinters, zonas, estados]
   );
 
   const historial = recentHistorialData?.historial ?? [];
   const ts = estadoData?.ts ?? "";
 
+  const closeSidebar = useCallback(() => {
+    setSidebarOpen(false);
+    window.requestAnimationFrame(() => menuButtonRef.current?.focus());
+  }, []);
+
   function handleSetPage(p: Page) {
     setPage(p);
-    setSidebarOpen(false);
+    if (sidebarOpen) closeSidebar();
   }
 
   return (
@@ -52,14 +67,15 @@ export default function DashboardClient() {
 
       {sidebarOpen && (
         <div
+          aria-hidden="true"
           className="fixed inset-0 bg-black/60 z-40 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
+          onClick={closeSidebar}
         />
       )}
 
       <Sidebar
         open={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
+        onClose={closeSidebar}
         page={page} setPage={handleSetPage}
         zonas={zonas} setZonas={setZonas}
         estados={estados} setEstados={setEstados}
@@ -72,10 +88,13 @@ export default function DashboardClient() {
 
         <div className="flex items-center gap-3 mb-5 lg:hidden">
           <button
+            ref={menuButtonRef}
             onClick={() => setSidebarOpen(true)}
             className="p-2 rounded-lg dark:bg-dark-card bg-white dark:border-dark-border border border-light-border
               dark:text-dark-text text-light-text cursor-pointer"
             aria-label="Abrir menú"
+            aria-controls="main-sidebar"
+            aria-expanded={sidebarOpen}
           >
             <svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor">
               <rect y="2" width="18" height="2" rx="1" />
@@ -90,27 +109,34 @@ export default function DashboardClient() {
         </div>
 
         {isLoading && (
-          <div className="flex flex-col items-center justify-center h-80 gap-4">
-            <div className="w-10 h-10 rounded-full border-4 border-brand-blue border-t-transparent animate-spin" />
-            <p className="dark:text-dark-muted text-light-muted text-[13px]">Conectando con La base de datos…</p>
+          <div role="status" aria-live="polite" className="flex flex-col items-center justify-center h-80 gap-4">
+            <div aria-hidden="true" className="w-10 h-10 rounded-full border-4 border-brand-blue border-t-transparent animate-spin" />
+            <p className="dark:text-dark-muted text-light-muted text-[13px]">Conectando con la base de datos…</p>
           </div>
         )}
         {isError && !isLoading && (
-          <div className="text-center mt-20">
+          <div role="alert" aria-live="assertive" className="text-center mt-20">
             <p className="text-brand-red font-bold text-lg mb-2">Error de conexión</p>
-            <p className="dark:text-dark-muted text-light-muted text-[13px]">
-              Servidor Offline... Comuniquese con el administrador.
+            <p className="dark:text-dark-muted text-light-muted text-[13px] mb-4">
+              No se pudo conectar con el servidor. Intenta nuevamente; si el problema continúa, comunícate con el administrador.
             </p>
+            <button type="button" onClick={() => void refetch()}
+              className="rounded-lg bg-brand-blue px-4 py-2 text-sm font-semibold text-white hover:opacity-90
+                focus:outline-none focus:ring-2 focus:ring-brand-blue/50 focus:ring-offset-2 dark:focus:ring-offset-dark-bg">
+              Reintentar
+            </button>
           </div>
         )}
         {!isLoading && !isError && (
           <>
             {page === "overview"   && <Overview   printers={printers} historial={historial} />}
             {page === "mapa"       && <Mapa        printers={printers} />}
-            {page === "sedes"      && <Sedes       printers={printers} historial={historial} />}
             {page === "alertas"    && <Alertas     printers={printers} />}
-            {page === "historial"  && <Historial   printers={printers} />}
-            {page === "analiticas" && <Analiticas  printers={printers} historial={historial} />}
+            {/* Sedes, Historial y Analiticas reciben allPrinters (sin filtrar):
+                son vistas historicas, no un snapshot del estado actual. */}
+            {page === "sedes"      && <Sedes       printers={allPrinters} historial={historial} />}
+            {page === "historial"  && <Historial   printers={allPrinters} />}
+            {page === "analiticas" && <Analiticas  printers={allPrinters} historial={historial} />}
             {page === "usuarios"   && <Usuarios    data={prStats ?? null} />}
             {page === "solicitudes" && <Solicitudes printers={printers} />}
             {page === "inventario" && <Inventario />}

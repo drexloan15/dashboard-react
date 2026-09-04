@@ -11,7 +11,7 @@ import { useTheme } from "@/context/ThemeContext";
 function Dot({ estado }: { estado: string }) {
   const on = estado === "Online";
   return (
-    <span className="inline-block w-2 h-2 rounded-full shrink-0 mr-1.5"
+    <span aria-hidden="true" className="inline-block w-2 h-2 rounded-full shrink-0 mr-1.5"
       style={{ background: on ? "#20c97a" : "#f04545" }} />
   );
 }
@@ -47,6 +47,7 @@ function IPDetail({ p, onBack, onBackSede, sede, historialByIp }: { p: Printer; 
   const cambios = detectCambios(historialByIp.get(p.IP) ?? []);
   return (
     <div>
+      <h1 className="sr-only">Por Sede — {sede} — {p.IP}</h1>
       <div className="flex items-center gap-1 mb-5 text-[12px]">
         <button onClick={onBackSede} className="text-brand-blue cursor-pointer hover:underline bg-transparent border-none">← Sedes</button>
         <span className="dark:text-dark-muted text-light-muted mx-1">/</span>
@@ -106,8 +107,26 @@ function IPDetail({ p, onBack, onBackSede, sede, historialByIp }: { p: Printer; 
 function SedeList({ printers, sede, onSelectIP, onBack, historialByIp }: { printers: Printer[]; sede: string; onSelectIP: (ip: string) => void; onBack: () => void; historialByIp: Map<string, HistorialRow[]> }) {
   const { theme } = useTheme();
   const zona = printers[0]?.ZONA || "";
+  const printersOrdenados = useMemo(
+    () => [...printers].sort((a, b) => a.IP.localeCompare(b.IP)),
+    [printers]
+  );
+  const cambiosPorIp = useMemo(() => {
+    const mapa = new Map<string, number>();
+    const ahora = Date.now();
+    for (const p of printersOrdenados) {
+      const cambiosRecientes = detectCambios(historialByIp.get(p.IP) ?? []).filter(c => {
+        const dias = (ahora - new Date(c.fecha).getTime()) / 86400000;
+        return dias <= 30;
+      }).length;
+      mapa.set(p.IP, cambiosRecientes);
+    }
+    return mapa;
+  }, [printersOrdenados, historialByIp]);
+
   return (
     <div>
+      <h1 className="sr-only">Por Sede — {sede}</h1>
       <button onClick={onBack} className="text-brand-blue text-[12px] cursor-pointer hover:underline bg-transparent border-none mb-5">
         ← Sedes
       </button>
@@ -117,15 +136,12 @@ function SedeList({ printers, sede, onSelectIP, onBack, historialByIp }: { print
       </div>
       <p className="dark:text-dark-muted text-light-muted mb-6">{printers.length} impresoras</p>
       <div>
-        {printers.sort((a, b) => a.IP.localeCompare(b.IP)).map((p, j) => {
+        {printersOrdenados.map((p, j) => {
           const mini = SUMINISTROS.map(([col, label]) => {
             const v = toNum(p[col]);
             return v !== null ? { col, label: label.slice(0, 13), v } : null;
           }).filter(Boolean) as { col: string; label: string; v: number }[];
-          const cambiosRecientes = detectCambios(historialByIp.get(p.IP) ?? []).filter(c => {
-            const dias = (Date.now() - new Date(c.fecha).getTime()) / 86400000;
-            return dias <= 30;
-          }).length;
+          const cambiosRecientes = cambiosPorIp.get(p.IP) ?? 0;
 
           return (
             <button key={p.IP} onClick={() => onSelectIP(p.IP)}
@@ -136,6 +152,7 @@ function SedeList({ printers, sede, onSelectIP, onBack, historialByIp }: { print
                 <div className="flex items-center mb-0.5">
                   <Dot estado={p.ESTADO} />
                   <span className="font-mono text-[12px] font-semibold dark:text-dark-text text-light-text">{p.IP}</span>
+                  <span className="ml-2 text-[9px] font-semibold dark:text-dark-muted text-light-muted">{p.ESTADO}</span>
                 </div>
                 <div className="text-[11px] dark:text-dark-muted text-light-muted pl-3.5">{String(p.AREA || "").slice(0, 45)}</div>
                 {cambiosRecientes > 0 && (

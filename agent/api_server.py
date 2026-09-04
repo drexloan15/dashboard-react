@@ -14,7 +14,10 @@ Requiere un archivo agent.env en el mismo directorio con:
 """
 
 import gzip
+import logging
 import os
+import secrets
+import zlib
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
@@ -22,7 +25,7 @@ from typing import List, Optional
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # ─────────────────────────────────────────────
 # CARGAR VARIABLES DESDE agent.env (sin dependencias externas)
@@ -83,6 +86,21 @@ class GzipRequestMiddleware:
     Si el cuerpo no viene comprimido, no toca nada.
     """
 
+    # Limites de tamaño, en bytes. Se aplican ANTES de comprobar el X-API-Key
+    # (este middleware corre a nivel ASGI, por delante del enrutado de FastAPI),
+    # asi que sin ellos cualquiera con la URL del tunel -- sin necesidad de una
+    # clave valida -- podia mandar un gzip de pocos KB que se expande a varios
+    # GB en memoria (bomba de descompresion, CWE-409). Ver auditoria de
+    # seguridad, hallazgo #2.
+    #
+    # MAX_BODY_COMPRIMIDO: el mayor lote real observado son ~30 MB YA
+    # descomprimidos (485.000 filas de pr_stats en la primera sincronizacion);
+    # comprimido eso ronda los 3 MB, asi que 5 MB deja margen de sobra sin
+    # acercarse al tamaño de una bomba de descompresion real.
+    # MAX_BODY_DESCOMPRIMIDO: el doble del mayor lote observado.
+    MAX_BODY_COMPRIMIDO    = 5 * 1024 * 1024
+    MAX_BODY_DESCOMPRIMIDO = 60 * 1024 * 1024
+
     def __init__(self, app):
         self.app = app
 
@@ -94,20 +112,40 @@ class GzipRequestMiddleware:
         if cabeceras.get(b"content-encoding", b"").lower() != b"gzip":
             return await self.app(scope, receive, send)
 
+        async def _rechazar(status: int, detail: str):
+            await send({"type": "http.response.start", "status": status,
+                        "headers": [(b"content-type", b"application/json")]})
+            await send({"type": "http.response.body",
+                        "body": f'{{"detail":{detail!r}}}'.encode()})
+
         crudo = b""
         while True:
             mensaje = await receive()
             crudo += mensaje.get("body", b"")
+            if len(crudo) > self.MAX_BODY_COMPRIMIDO:
+                logging.warning("gzip: cuerpo comprimido excede el limite (%d bytes)", len(crudo))
+                await _rechazar(413, "cuerpo comprimido demasiado grande")
+                return
             if not mensaje.get("more_body", False):
                 break
 
         try:
-            cuerpo = gzip.decompress(crudo)
-        except Exception as e:
-            await send({"type": "http.response.start", "status": 400,
-                        "headers": [(b"content-type", b"application/json")]})
-            await send({"type": "http.response.body",
-                        "body": f'{{"detail":"cuerpo gzip invalido: {e}"}}'.encode()})
+            # zlib.decompressobj().decompress(data, max_length) SI permite
+            # limitar el tamaño de salida; gzip.decompress() no acepta un tope,
+            # que es justo el problema que causaba la bomba de descompresion.
+            # wbits = MAX_WBITS | 16 le dice a zlib que el flujo trae el
+            # encabezado/checksum de formato gzip (no zlib puro ni raw deflate).
+            d = zlib.decompressobj(zlib.MAX_WBITS | 16)
+            cuerpo = d.decompress(crudo, self.MAX_BODY_DESCOMPRIMIDO)
+            if d.unconsumed_tail:
+                logging.warning("gzip: cuerpo descomprimido excede el limite (%d bytes)",
+                                 self.MAX_BODY_DESCOMPRIMIDO)
+                await _rechazar(413, "cuerpo descomprimido demasiado grande")
+                return
+        except Exception:
+            # Sin el detalle de la excepcion en la respuesta: puede filtrar
+            # informacion interna a quien no tiene siquiera una API key valida.
+            await _rechazar(400, "cuerpo gzip invalido")
             return
 
         # Content-Length ya no corresponde al cuerpo descomprimido, y dejar el
@@ -141,7 +179,13 @@ def get_conn():
 
 
 def auth(x_api_key: str = Header(...)):
-    if x_api_key != API_KEY:
+    # secrets.compare_digest en vez de != : una comparacion normal de strings
+    # retorna en cuanto encuentra la primera diferencia, lo que abre un canal
+    # lateral de temporizacion para reconstruir la clave caracter por caracter.
+    # Es mas relevante aca que en el PIN del dashboard porque este endpoint no
+    # tiene rate-limit y es alcanzable desde internet via el tunel de
+    # Cloudflare. Ver auditoria de seguridad, hallazgo #4.
+    if not secrets.compare_digest(x_api_key, API_KEY):
         raise HTTPException(status_code=403, detail="API key inválida")
 
 
@@ -337,9 +381,26 @@ class FilaImpresora(BaseModel):
     KIT_FUSOR_SERIE:          Optional[str] = None
     CONTENEDOR_DESECHO_SERIE: Optional[str] = None
 
+    # Ningun campo de esta fila deberia superar unos pocos cientos de
+    # caracteres (son nombres de sede/area/modelo, o lecturas SNMP). Un
+    # validador comodin en vez de anotar Field(max_length=...) en cada uno de
+    # los ~38 campos: mismo efecto, sin repetirlo 38 veces ni arriesgarse a
+    # olvidar alguno. Sin esto, con una API key valida (o filtrada) se podia
+    # mandar un JSON legitimo pero enorme -- strings de varios MB en un campo
+    # cualquiera -- y forzar al servidor a procesarlo entero. Ver auditoria de
+    # seguridad, hallazgo #7.
+    @field_validator("*", mode="before")
+    @classmethod
+    def _limitar_longitud(cls, v):
+        if isinstance(v, str) and len(v) > 2000:
+            raise ValueError("campo de texto demasiado largo (máx. 2000 caracteres)")
+        return v
+
 
 class Payload(BaseModel):
-    filas: List[FilaImpresora]
+    # 2000 es un techo generoso: el inventario real ronda las 120 impresoras.
+    # Acota el peor caso (un lote enorme) sin arriesgar romper una carga legitima.
+    filas: List[FilaImpresora] = Field(max_length=2000)
 
 
 # ─────────────────────────────────────────────
@@ -347,12 +408,17 @@ class Payload(BaseModel):
 # ─────────────────────────────────────────────
 @app.get("/health")
 def health():
+    # Sin auth a proposito (es un healthcheck), pero por lo mismo no debe
+    # devolver el mensaje crudo de la excepcion: cualquiera con la URL del
+    # tunel podia leer detalles de conectividad/hostname sin ninguna clave.
+    # Ver auditoria de seguridad, hallazgo #6.
     try:
         conn = get_conn()
         conn.close()
         return {"status": "ok", "db": "conectada"}
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"BD no disponible: {e}")
+    except Exception:
+        logging.exception("health: BD no disponible")
+        raise HTTPException(status_code=503, detail="BD no disponible")
 
 
 _ESTADO_ACTUAL_UPSERT = """
@@ -699,9 +765,20 @@ class FilaPrStats(BaseModel):
     SUBMITDATEUTC:        Optional[str] = None
     FINALDATEUTC:         Optional[str] = None
 
+    # Mismo motivo que FilaImpresora._limitar_longitud: acotar cada campo sin
+    # anotar Field(max_length=...) en los ~29 campos uno por uno.
+    @field_validator("*", mode="before")
+    @classmethod
+    def _limitar_longitud(cls, v):
+        if isinstance(v, str) and len(v) > 2000:
+            raise ValueError("campo de texto demasiado largo (máx. 2000 caracteres)")
+        return v
+
 
 class PayloadPrStats(BaseModel):
-    filas: List[FilaPrStats]
+    # BATCH_SIZE en pr_stats_agent.py es 2000 filas por lote; 5000 deja margen
+    # sin dejar de acotar el peor caso (ver auditoria de seguridad, hallazgo #7).
+    filas: List[FilaPrStats] = Field(max_length=5000)
 
 
 def _parse_ts(val: Optional[str]) -> Optional[datetime]:

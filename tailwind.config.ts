@@ -14,7 +14,7 @@ const config: Config = {
           border:  "#1a2535",
           border2: "#223040",
           text:    "#d0dce8",
-          muted:   "#4e6070",
+          muted:   "#8494a3",
         },
         light: {
           bg:      "#f8f9fa",

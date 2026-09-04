@@ -8,7 +8,7 @@ import type { SedeInfo } from "./MapaLeaflet";
 const MapaLeaflet = dynamic(() => import("./MapaLeaflet"), {
   ssr: false,
   loading: () => (
-    <div className="flex items-center justify-center h-full min-h-[520px] dark:text-dark-muted text-light-muted text-sm">
+    <div role="status" aria-live="polite" className="flex items-center justify-center h-full min-h-[520px] dark:text-dark-muted text-light-muted text-sm">
       Cargando mapa…
     </div>
   ),

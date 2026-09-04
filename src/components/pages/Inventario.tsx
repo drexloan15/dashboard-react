@@ -18,7 +18,7 @@ const VACIA: Omit<InventarioItem, "updated_at" | "updated_by"> = {
 const input =
   "w-full px-3 py-2 rounded-lg text-[13px] outline-none border " +
   "dark:border-dark-border border-light-border dark:bg-dark-surface bg-white " +
-  "dark:text-dark-text text-light-text focus:border-blue-500";
+  "dark:text-dark-text text-light-text focus:border-blue-500 focus:ring-2 focus:ring-brand-blue/40";
 
 /** Pide el PIN y lo guarda en sessionStorage: el backend lo exige en cada
  *  edicion (cabecera X-Admin-Pin), no basta con marcar la sesion como admin. */
@@ -53,11 +53,15 @@ function PedirPin({ onOk }: { onOk: () => void }) {
         <input
           type="password" value={pin} autoFocus
           onChange={e => setPin(e.target.value)}
+          aria-label="PIN de administrador"
+          aria-invalid={Boolean(error)}
+          aria-describedby={error ? "inventario-pin-error" : undefined}
           placeholder="PIN" className={input}
         />
-        {error && <p className="text-[12px] text-red-500">{error}</p>}
+        {error && <p id="inventario-pin-error" role="alert" className="text-[12px] text-red-500">{error}</p>}
         <button
           type="submit" disabled={!pin || verify.isPending}
+          aria-live="polite"
           className="px-4 py-2 rounded-lg text-[13px] font-medium bg-blue-600 text-white disabled:opacity-50"
         >
           {verify.isPending ? "Validando..." : "Desbloquear"}
@@ -169,13 +173,13 @@ export default function Inventario() {
       </div>
 
       {aviso && (
-        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-[12px] text-red-500">
+        <div role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-[12px] text-red-500">
           {aviso}
         </div>
       )}
 
-      {isLoading && <p className="text-[12px] dark:text-dark-muted text-light-muted">Cargando inventario...</p>}
-      {error && <p className="text-[12px] text-red-500">No se pudo cargar el inventario.</p>}
+      {isLoading && <p role="status" aria-live="polite" className="text-[12px] dark:text-dark-muted text-light-muted">Cargando inventario...</p>}
+      {error && <p role="alert" className="text-[12px] text-red-500">No se pudo cargar el inventario.</p>}
 
       {editando && (
         <div ref={panelRef}
@@ -209,6 +213,7 @@ export default function Inventario() {
           </label>
           <div className="flex gap-2 mt-4">
             <button onClick={confirmar} disabled={guardar.isPending}
+              aria-live="polite"
               className="px-4 py-2 rounded-lg text-[13px] font-medium bg-blue-600 text-white disabled:opacity-50">
               {guardar.isPending ? "Guardando..." : "Guardar"}
             </button>

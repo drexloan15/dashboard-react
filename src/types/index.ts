@@ -25,6 +25,8 @@ export interface Printer {
 }
 
 export interface HistorialRow {
+  /** Solo viene poblado en /historial (paginado); /historial/recent no lo trae. */
+  ID?: number;
   SERIE?: string;
   TIMESTAMP?: string;
   FECHA?: string;

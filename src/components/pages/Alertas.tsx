@@ -93,7 +93,7 @@ function PinModal({ lockout, maxLockout, onRateLimited, onSuccess, onClose }: {
         {isLocked ? (
           /* ── Estado bloqueado ── */
           <div className="text-center py-2 mb-1">
-            <div className="text-[52px] font-black tabular-nums leading-none text-brand-red mb-2">
+            <div role="status" aria-live="polite" aria-atomic="true" className="text-[52px] font-black tabular-nums leading-none text-brand-red mb-2">
               {lockout}s
             </div>
             <p className="text-[11px] dark:text-dark-muted text-light-muted leading-relaxed">
@@ -117,15 +117,19 @@ function PinModal({ lockout, maxLockout, onRateLimited, onSuccess, onClose }: {
               placeholder="PIN"
               maxLength={8}
               disabled={isPending}
+              aria-label="PIN de administrador"
+              aria-invalid={error}
+              aria-describedby={error ? "alertas-pin-error" : undefined}
               className={`w-full text-center text-[18px] font-bold tracking-[0.4em] px-3 py-2.5 rounded-lg border outline-none mb-3
                 dark:bg-dark-surface bg-gray-50 dark:text-dark-text text-light-text transition-colors
+                focus:ring-2 focus:ring-brand-blue/40
                 ${error
                   ? "border-brand-red dark:border-brand-red"
                   : "dark:border-dark-border border-light-border focus:border-brand-blue"
                 }`}
             />
             {error && (
-              <p className="text-[11px] text-brand-red text-center mb-3">PIN incorrecto</p>
+              <p id="alertas-pin-error" role="alert" className="text-[11px] text-brand-red text-center mb-3">PIN incorrecto</p>
             )}
             <div className="flex gap-2">
               <button type="button" onClick={onClose}
@@ -133,6 +137,7 @@ function PinModal({ lockout, maxLockout, onRateLimited, onSuccess, onClose }: {
                 Cancelar
               </button>
               <button type="submit" disabled={isPending}
+                aria-live="polite"
                 className="flex-1 py-2 rounded-lg text-[12px] font-semibold bg-brand-blue text-white cursor-pointer hover:opacity-90 transition-opacity disabled:opacity-60">
                 {isPending ? "..." : "Entrar"}
               </button>
@@ -335,17 +340,18 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <select value={filtroSede} onChange={e => setFiltroSede(e.target.value)}
-            className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer">
+          <select aria-label="Filtrar alertas por sede" value={filtroSede} onChange={e => setFiltroSede(e.target.value)}
+            className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
             <option value="Todas">Todas las sedes</option>
             {sedes.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select value={filtroSum} onChange={e => setFiltroSum(e.target.value)}
-            className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer">
+          <select aria-label="Filtrar alertas por suministro" value={filtroSum} onChange={e => setFiltroSum(e.target.value)}
+            className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
             <option value="Todos">Todos los suministros</option>
             {sumins.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           <button onClick={sendAlert} disabled={sendState === "loading"}
+            aria-live="polite"
             className="page-title flex items-center gap-2 px-4 py-2 rounded-lg text-[12px] font-semibold
               bg-brand-blue text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed
               transition-all cursor-pointer shrink-0"
@@ -359,7 +365,7 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
         {alertas.length} alertas activas
       </p>
       {sendMsg && (
-        <p className={`text-[12px] mb-4 px-3 py-2 rounded-lg ${
+        <p role={sendState === "error" ? "alert" : "status"} aria-live={sendState === "error" ? "assertive" : "polite"} className={`text-[12px] mb-4 px-3 py-2 rounded-lg ${
           sendState === "error" ? "text-brand-red bg-brand-red/10" : "text-brand-green bg-brand-green/10"
         }`}>
           {sendState === "error" ? "✕ " : "✓ "}{sendMsg}

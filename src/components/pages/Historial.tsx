@@ -68,13 +68,14 @@ export default function Historial({ printers }: { printers: Printer[] }) {
   function resetPage() { setPage(0); }
 
   const selectCls = `px-2 py-1.5 rounded-lg text-[12px] dark:bg-dark-surface dark:border-dark-border
-    dark:text-dark-text bg-gray-50 border border-light-border text-light-text outline-none`;
+    dark:text-dark-text bg-gray-50 border border-light-border text-light-text outline-none
+    focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue`;
 
   return (
     <div>
       <h1 className="page-title text-2xl font-bold mb-1 dark:text-dark-text text-light-text">Historial</h1>
-      <p className="page-title text-[13px] dark:text-dark-muted text-light-muted mb-6" style={{ animationDelay: "50ms" }}>
-        {total > 0 ? `${total.toLocaleString()} registros en base de datos` : "Cargando…"}
+      <p role="status" aria-live="polite" className="page-title text-[13px] dark:text-dark-muted text-light-muted mb-6" style={{ animationDelay: "50ms" }}>
+        {isLoading ? "Cargando…" : `${total.toLocaleString()} registros en base de datos`}
       </p>
 
       <Card className="card-enter" style={{ animationDelay: "100ms" }}>
@@ -83,21 +84,22 @@ export default function Historial({ printers }: { printers: Printer[] }) {
           <input
             value={search} onChange={e => { setSearch(e.target.value); resetPage(); }}
             placeholder="Buscar texto..."
+            aria-label="Buscar en el historial"
             className={`${selectCls} w-44`}
           />
-          <select value={filterSede} onChange={e => { setSede(e.target.value); setArea(""); setIP(""); resetPage(); }} className={selectCls}>
+          <select aria-label="Filtrar por sede" value={filterSede} onChange={e => { setSede(e.target.value); setArea(""); setIP(""); resetPage(); }} className={selectCls}>
             <option value="">Todas las sedes</option>
             {sedes.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select value={filterArea} onChange={e => { setArea(e.target.value); setIP(""); resetPage(); }} className={selectCls}>
+          <select aria-label="Filtrar por área" value={filterArea} onChange={e => { setArea(e.target.value); setIP(""); resetPage(); }} className={selectCls}>
             <option value="">Todas las áreas</option>
             {areas.map(a => <option key={a} value={a}>{a}</option>)}
           </select>
-          <select value={filterIP} onChange={e => { setIP(e.target.value); resetPage(); }} className={selectCls}>
+          <select aria-label="Filtrar por IP" value={filterIP} onChange={e => { setIP(e.target.value); resetPage(); }} className={selectCls}>
             <option value="">Todas las IPs</option>
             {ips.map(ip => <option key={ip} value={ip}>{ip}</option>)}
           </select>
-          <select value={filterEstado} onChange={e => { setEstado(e.target.value); resetPage(); }} className={selectCls}>
+          <select aria-label="Filtrar por estado" value={filterEstado} onChange={e => { setEstado(e.target.value); resetPage(); }} className={selectCls}>
             <option value="">Todos los estados</option>
             <option value="online">Online</option>
             <option value="offline">Offline</option>
@@ -105,6 +107,7 @@ export default function Historial({ printers }: { printers: Printer[] }) {
           <input
             type="date" value={filterFecha}
             onChange={e => { setFecha(e.target.value); resetPage(); }}
+            aria-label="Filtrar por fecha"
             className={selectCls}
           />
           {(search || filterSede || filterArea || filterIP || filterEstado || filterFecha) && (
@@ -117,7 +120,7 @@ export default function Historial({ printers }: { printers: Printer[] }) {
         </div>
 
         {/* Tabla */}
-        <div className={`overflow-x-auto rounded-lg dark:border-dark-border border border-light-border transition-opacity ${isLoading ? "opacity-50" : ""}`}>
+        <div aria-busy={isLoading} className={`overflow-x-auto rounded-lg dark:border-dark-border border border-light-border transition-opacity ${isLoading ? "opacity-50" : ""}`}>
           <table className="w-full text-[11px]">
             <thead>
               <tr className="dark:bg-dark-surface bg-gray-50 dark:border-dark-border border-b border-light-border">
@@ -130,7 +133,13 @@ export default function Historial({ printers }: { printers: Printer[] }) {
             </thead>
             <tbody>
               {rows.map((r, i) => (
-                <tr key={i}
+                // id real de la fila en vez del indice del array: al cambiar
+                // de pagina o filtro, el indice se reutiliza para filas
+                // distintas y React puede reconciliar el DOM como si fuera
+                // "la misma fila". SERIE+TIMESTAMP es el respaldo (unico por
+                // la restriccion UNIQUE(serie, fecha, hora) de la tabla) para
+                // filas que vinieran sin id. Ver correcciones/funcional.md, #9.
+                <tr key={r.ID ?? `${r.SERIE}-${r.TIMESTAMP}`}
                   className="row-enter dark:border-dark-border border-b border-light-border last:border-0 dark:hover:bg-dark-border/30 hover:bg-gray-50 transition-colors"
                   style={{ animationDelay: `${120 + Math.min(i * 10, 200)}ms` }}>
                   {ALL_COLS.map(c => {

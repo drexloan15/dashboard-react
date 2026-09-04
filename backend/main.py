@@ -3,8 +3,11 @@ Backend FastAPI - Dashboard Lexmark
 Lee desde PostgreSQL. Los datos son escritos por api_server.py
 que recibe del agente_lexmark via REST. Sin dependencia de Google Sheets.
 """
+import html as _html
 import logging
 import os
+import re
+import secrets
 import threading
 import time
 import smtplib
@@ -32,7 +35,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 # ── CONFIG ───────────────────────────────────────────────────────────────────
 CACHE_TTL    = 60
@@ -47,6 +50,8 @@ ALLOWED_ORIGINS = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 # Rate-limit PIN: N intentos por ventana de T segundos por IP
 PIN_MAX_ATTEMPTS = int(os.getenv("PIN_MAX_ATTEMPTS", "5"))
 PIN_WINDOW_S     = int(os.getenv("PIN_WINDOW_S",     "30"))
+RATE_LIMIT_MAX_RETENTION_S = max(PIN_WINDOW_S, 300)
+RATE_LIMIT_CLEANUP_THRESHOLD = 1000
 
 # ── EMAIL ────────────────────────────────────────────────────────────────────
 EMAIL_FROM      = os.getenv("EMAIL_FROM", "")
@@ -81,12 +86,23 @@ _rl_state: dict[str, list[float]] = defaultdict(list)
 def _rate_limit_ok(key: str, max_calls: int, window_s: int) -> bool:
     now = time.time()
     with _rl_lock:
-        recent = [t for t in _rl_state[key] if now - t < window_s]
+        recent = [t for t in _rl_state.get(key, []) if now - t < window_s]
         if len(recent) >= max_calls:
             _rl_state[key] = recent
             return False
         recent.append(now)
         _rl_state[key] = recent
+
+        # Purga oportunista para que una IP que no vuelve a conectarse no deje
+        # una clave permanente. Se conserva al menos la ventana mas larga que
+        # usa cualquier endpoint (send-alert: 300 s).
+        if len(_rl_state) > RATE_LIMIT_CLEANUP_THRESHOLD:
+            stale_keys = [
+                stale_key for stale_key, timestamps in _rl_state.items()
+                if not timestamps or now - timestamps[-1] >= RATE_LIMIT_MAX_RETENTION_S
+            ]
+            for stale_key in stale_keys:
+                del _rl_state[stale_key]
     return True
 
 # ── APP ──────────────────────────────────────────────────────────────────────
@@ -122,7 +138,7 @@ def _get_pool() -> psycopg2.pool.ThreadedConnectionPool | None:
         from urllib.parse import urlparse
         u = urlparse(DATABASE_URL)
         _db_pool = psycopg2.pool.ThreadedConnectionPool(
-            1, 5,
+            1, 15,
             host=u.hostname, port=u.port or 5432,
             dbname=u.path.lstrip("/"),
             user=u.username, password=u.password,
@@ -461,16 +477,42 @@ def _query_estado(conn) -> list[dict]:
     return [dict(r) for r in cur.fetchall()]
 
 def _query_historial_recent(conn, days: int = 30) -> list[dict]:
+    """Devuelve una muestra acotada que conserva los datos usados por la UI.
+
+    Primera/ultima lectura preservan cambios de suministros; minimo/maximo de
+    contador preservan exactamente los deltas por dia, semana y mes. El payload
+    queda limitado a cuatro filas por impresora y dia.
+    """
     sc = ", ".join(f'{c.lower()} AS "{c}"' for c in SUPPLY_COLS)
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     cur.execute(f"""
+        WITH ranked AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY serie, ip, fecha ORDER BY timestamp ASC
+                   ) AS rn_first,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY serie, ip, fecha ORDER BY timestamp DESC
+                   ) AS rn_last,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY serie, ip, fecha
+                       ORDER BY CASE WHEN contador > 0 THEN 0 ELSE 1 END,
+                                contador ASC NULLS LAST
+                   ) AS rn_min_counter,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY serie, ip, fecha ORDER BY contador DESC NULLS LAST
+                   ) AS rn_max_counter
+            FROM historial
+            WHERE timestamp >= NOW() - (%s * INTERVAL '1 day')
+        )
         SELECT serie AS "SERIE", ip AS "IP", sede AS "SEDE", estado AS "ESTADO",
                contador AS "CONTADOR",
                {sc},
                timestamp::text AS "TIMESTAMP", fecha::text AS "FECHA",
                timestamp::text AS "_ts",        fecha::text AS "_fecha"
-        FROM historial
-        WHERE timestamp >= NOW() - (%s * INTERVAL '1 day')
+        FROM ranked
+        WHERE rn_first = 1 OR rn_last = 1
+           OR rn_min_counter = 1 OR rn_max_counter = 1
         ORDER BY timestamp DESC
     """, (days,))
     return [dict(r) for r in cur.fetchall()]
@@ -536,31 +578,66 @@ class AlertaStatusBody(BaseModel):
     updated_by: str = "admin"
 
 class InventarioBody(BaseModel):
-    ip:       str
-    sede:     str = ""
-    area:     str = ""
-    zona:     str = ""
-    modelo:   str = ""
-    tipo:     str = ""
-    conexion: str = ""
+    ip:       str = Field(max_length=64)
+    sede:     str = Field(default="", max_length=128)
+    area:     str = Field(default="", max_length=128)
+    zona:     str = Field(default="", max_length=64)
+    modelo:   str = Field(default="", max_length=128)
+    tipo:     str = Field(default="", max_length=64)
+    conexion: str = Field(default="", max_length=64)
     activo:   bool = True
 
 class PinBody(BaseModel):
-    pin: str
+    pin: str = Field(max_length=64)
 
 class SolicitudBody(BaseModel):
-    printer_ip:    str
-    suministros:   list[str]
-    to_email:      str
-    notas:         str = ""
-    reportado_por: str
+    printer_ip:    str = Field(max_length=64)
+    suministros:   list[str] = Field(max_length=20)
+    to_email:      str = Field(max_length=512)
+    notas:         str = Field(default="", max_length=2000)
+    reportado_por: str = Field(max_length=200)
+
+    # Corta cualquier intento de inyectar cabeceras SMTP adicionales (CRLF
+    # injection): estos dos campos terminan en el Subject y en el cuerpo del
+    # correo. Ver auditoria de seguridad, hallazgo #1.
+    @field_validator("printer_ip", "reportado_por", "notas")
+    @classmethod
+    def _sin_saltos_de_linea(cls, v: str) -> str:
+        if "\r" in v or "\n" in v:
+            raise ValueError("El campo no puede contener saltos de línea.")
+        return v
+
+    @field_validator("to_email")
+    @classmethod
+    def _direcciones_validas(cls, v: str) -> str:
+        direcciones = [a.strip() for a in v.replace(";", ",").split(",") if a.strip()]
+        if not direcciones:
+            raise ValueError("El correo destinatario es requerido.")
+        for a in direcciones:
+            if "\r" in a or "\n" in a or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", a):
+                raise ValueError(f"Dirección de correo inválida: {a!r}")
+        return v
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # No se confia en X-Forwarded-For: este backend solo se alcanza desde el
+    # contenedor frontend por la red interna de Docker, no hay ningun proxy de
+    # confianza por delante que fije esta cabecera -- cualquier cliente puede
+    # ponerla a mano para que cada intento de PIN caiga en una IP distinta y
+    # así evadir el rate-limit (ver auditoria de seguridad, hallazgo #3).
+    # request.client.host es la IP de la conexion TCP real; no se puede falsear
+    # sin controlar la ruta de red hasta el backend.
     return request.client.host if request.client else "unknown"
+
+def _fallo_interno(e: Exception, contexto: str,
+                    mensaje: str = "Error interno. Contacte al administrador.") -> HTTPException:
+    """Registra el detalle completo solo en el log del servidor y devuelve al
+    cliente un mensaje generico. El texto de una excepcion de psycopg2/smtplib
+    puede filtrar nombres de tabla/columna o detalles de conectividad, y varios
+    endpoints que la reenviaban tal cual no requieren autenticacion (ver
+    auditoria de seguridad, hallazgo #6)."""
+    logging.exception(f"[{contexto}] {mensaje}")
+    return HTTPException(status_code=500, detail=mensaje)
 
 # ── ENDPOINTS ────────────────────────────────────────────────────────────────
 
@@ -596,7 +673,7 @@ async def get_historial_recent(days: int = Query(30, ge=1, le=365)):
             historial = _query_historial_recent(conn, days)
         return {"historial": historial, "ts": datetime.now().strftime("DB %H:%M:%S")}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "GET /historial/recent")
 
 @app.get("/historial")
 async def get_historial_page(
@@ -624,12 +701,19 @@ async def get_historial_page(
     if fecha:
         where_parts.append("fecha::text = %s"); params.append(fecha)
     if search:
+        # area sumada a la busqueda de texto libre: sin esto, un area
+        # renombrada o una impresora dada de baja en el inventario actual
+        # quedaba sin ninguna forma de encontrarse desde la UI (el desplegable
+        # tambien depende del inventario actual, pero el buscador de texto
+        # libre es el unico camino que no requiere tocar el backend para
+        # areas que ya no existen). Ver correcciones/funcional.md, hallazgo #6.
         where_parts.append(
-            "(ip ILIKE %s OR COALESCE(sede,'') ILIKE %s OR COALESCE(estado,'') ILIKE %s"
-            " OR fecha::text ILIKE %s OR COALESCE(contador::text,'') ILIKE %s)"
+            "(ip ILIKE %s OR COALESCE(sede,'') ILIKE %s OR COALESCE(area,'') ILIKE %s"
+            " OR COALESCE(estado,'') ILIKE %s OR fecha::text ILIKE %s"
+            " OR COALESCE(contador::text,'') ILIKE %s)"
         )
         s = f"%{search}%"
-        params.extend([s, s, s, s, s])
+        params.extend([s, s, s, s, s, s])
 
     where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
     offset = (page - 1) * page_size
@@ -640,7 +724,7 @@ async def get_historial_page(
             cur.execute(f"SELECT COUNT(*) AS total FROM historial {where_sql}", params)
             total = cur.fetchone()["total"]
             cur.execute(f"""
-                SELECT serie AS "SERIE", ip AS "IP", sede AS "SEDE",
+                SELECT id AS "ID", serie AS "SERIE", ip AS "IP", sede AS "SEDE",
                        COALESCE(area, '') AS "AREA", estado AS "ESTADO",
                        contador AS "CONTADOR",
                        {sc},
@@ -656,7 +740,7 @@ async def get_historial_page(
         return {"items": items, "total": total, "page": page,
                 "page_size": page_size, "total_pages": total_pages}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "GET /historial")
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 @app.post("/auth/pin")
@@ -678,7 +762,7 @@ async def verify_pin(body: PinBody, request: Request):
             detail={"message": f"Demasiados intentos. Espera {PIN_WINDOW_S} segundos.", "retry_after": PIN_WINDOW_S}
         )
 
-    ok = body.pin == ADMIN_PIN
+    ok = secrets.compare_digest(body.pin, ADMIN_PIN)
     if not ok:
         # Pequeño delay para desalentar enumeración — no bloquea el event loop
         # porque es LAN y los intentos son lentos de todas formas.
@@ -698,7 +782,7 @@ async def get_alertas_status():
             cur.execute("SELECT alert_key, estado FROM alerta_estado")
             return {r["alert_key"]: r["estado"] for r in cur.fetchall()}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "GET /alertas/status")
 
 @app.put("/alertas/status/{alert_key:path}")
 async def put_alerta_status(alert_key: str, body: AlertaStatusBody, request: Request):
@@ -721,7 +805,7 @@ async def put_alerta_status(alert_key: str, body: AlertaStatusBody, request: Req
         )
         return {"ok": True, "alert_key": alert_key, "estado": body.estado}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "PUT /alertas/status")
 
 @app.delete("/alertas/status/{alert_key:path}")
 async def delete_alerta_status(alert_key: str, request: Request):
@@ -732,7 +816,7 @@ async def delete_alerta_status(alert_key: str, request: Request):
         _audit.info(f"ALERT_DELETE ip={_client_ip(request)!r} key={alert_key!r}")
         return {"ok": True, "alert_key": alert_key}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "DELETE /alertas/status")
 
 # ── SOLICITUDES DE SUMINISTROS ────────────────────────────────────────────────
 
@@ -749,7 +833,7 @@ def _exigir_pin(pin: str | None, request: Request, accion: str) -> None:
     if not _rate_limit_ok(f"inv:{client}", PIN_MAX_ATTEMPTS, PIN_WINDOW_S):
         _audit.warning(f"INV_RATE_LIMITED ip={client}")
         raise HTTPException(status_code=429, detail="Demasiados intentos. Espera un momento.")
-    if pin != ADMIN_PIN:
+    if not secrets.compare_digest(pin or "", ADMIN_PIN):
         _audit.warning(f"INV_PIN_FAIL ip={client} accion={accion}")
         time.sleep(0.4)
         raise HTTPException(status_code=403, detail="PIN invalido.")
@@ -854,7 +938,7 @@ async def get_solicitudes(
         return {"items": items, "total": total, "page": page,
                 "page_size": page_size, "total_pages": total_pages}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "GET /solicitudes")
 
 @app.post("/solicitudes/enviar")
 async def enviar_solicitud(body: SolicitudBody, request: Request):
@@ -866,6 +950,16 @@ async def enviar_solicitud(body: SolicitudBody, request: Request):
         raise HTTPException(status_code=422, detail="El correo destinatario es requerido.")
     if not body.reportado_por.strip():
         raise HTTPException(status_code=422, detail="El nombre del reportante es requerido.")
+
+    # Sin PIN a proposito (es una accion que cualquier tecnico de soporte hace
+    # varias veces seguidas), pero SI con rate-limit: este endpoint dispara un
+    # correo real con las credenciales corporativas, y sin limite alguien en la
+    # LAN podia agotar la cuota de Gmail o usarlo como relay hacia direcciones
+    # externas arbitrarias. Ver auditoria de seguridad, hallazgo #1.
+    client = _client_ip(request)
+    if not _rate_limit_ok(f"solicitud:{client}", max_calls=10, window_s=60):
+        _audit.warning(f"SOLICITUD_RATE_LIMITED ip={client}")
+        raise HTTPException(status_code=429, detail="Demasiadas solicitudes seguidas. Espera un momento.")
 
     # Buscar impresora en caché para obtener info actualizada
     printer: dict | None = None
@@ -879,24 +973,15 @@ async def enviar_solicitud(body: SolicitudBody, request: Request):
     area   = printer.get("AREA") or "—"     if printer else "—"
     modelo = printer.get("MODELO_INV") or "—" if printer else "—"
 
-    # Guardar en BD
-    try:
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO solicitudes_suministros
-                    (printer_ip, sede, area, modelo, suministros, to_email, notas, reportado_por)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-            """, (body.printer_ip, sede, area, modelo, body.suministros,
-                  body.to_email, body.notas, body.reportado_por))
-            sol_id = cur.fetchone()[0]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-    # Construir filas de suministros para el correo
+    # Construir filas de suministros para el correo.
+    # Todo lo que entra aca puede venir del request (label cae al valor crudo
+    # de `suministros` si la clave no es una de las conocidas) o de datos
+    # sembrados por el agente en estado_actual (sede/area/modelo) -- ninguno de
+    # los dos esta garantizado libre de HTML, asi que se escapa todo antes de
+    # interpolarlo en el correo. Ver auditoria de seguridad, hallazgo #1.
     supply_rows = ""
     for key in body.suministros:
-        label = SUMINISTROS_LABELS.get(key, key)
+        label = _html.escape(SUMINISTROS_LABELS.get(key, key))
         nivel = "—"
         if printer:
             raw = printer.get(key)
@@ -915,7 +1000,7 @@ async def enviar_solicitud(body: SolicitudBody, request: Request):
     if body.notas.strip():
         notas_block = f"""
         <p style="margin:16px 0 6px;font-size:13px;color:#374151;font-weight:600">Anotaciones:</p>
-        <div style="padding:10px 14px;background:#f3f4f6;border-radius:6px;font-size:13px;color:#6b7280;white-space:pre-wrap">{body.notas}</div>"""
+        <div style="padding:10px 14px;background:#f3f4f6;border-radius:6px;font-size:13px;color:#6b7280;white-space:pre-wrap">{_html.escape(body.notas)}</div>"""
 
     now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
     html = f"""
@@ -927,15 +1012,15 @@ async def enviar_solicitud(body: SolicitudBody, request: Request):
       <div style="background:#f9fafb;padding:24px 32px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb">
         <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
           <tr><td style="color:#6b7280;font-size:12px;padding:4px 0;width:130px">IP</td>
-              <td style="font-family:monospace;font-size:13px;color:#111">{body.printer_ip}</td></tr>
+              <td style="font-family:monospace;font-size:13px;color:#111">{_html.escape(body.printer_ip)}</td></tr>
           <tr><td style="color:#6b7280;font-size:12px;padding:4px 0">Sede</td>
-              <td style="font-size:13px;color:#111">{sede}</td></tr>
+              <td style="font-size:13px;color:#111">{_html.escape(sede)}</td></tr>
           <tr><td style="color:#6b7280;font-size:12px;padding:4px 0">&Aacute;rea</td>
-              <td style="font-size:13px;color:#111">{area}</td></tr>
+              <td style="font-size:13px;color:#111">{_html.escape(area)}</td></tr>
           <tr><td style="color:#6b7280;font-size:12px;padding:4px 0">Modelo</td>
-              <td style="font-size:13px;color:#111">{modelo}</td></tr>
+              <td style="font-size:13px;color:#111">{_html.escape(modelo)}</td></tr>
           <tr><td style="color:#6b7280;font-size:12px;padding:4px 0">Reportado por</td>
-              <td style="font-size:13px;color:#111;font-weight:700">{body.reportado_por}</td></tr>
+              <td style="font-size:13px;color:#111;font-weight:700">{_html.escape(body.reportado_por)}</td></tr>
         </table>
         <p style="margin:0 0 8px;font-size:13px;color:#374151;font-weight:600">Suministros solicitados:</p>
         <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.08)">
@@ -949,25 +1034,56 @@ async def enviar_solicitud(body: SolicitudBody, request: Request):
         </table>
         {notas_block}
         <p style="color:#9ca3af;font-size:11px;margin-top:20px">
-          Solicitud #{sol_id} &middot; Generado por Dashboard Lexmark &mdash; Comutel Per&uacute;.
+          Generado por Dashboard Lexmark &mdash; Comutel Per&uacute;.
         </p>
       </div>
     </div>"""
 
     to_list = [a.strip() for a in body.to_email.replace(";", ",").split(",") if a.strip()]
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Solicitud de Suministros – {sede} ({body.printer_ip}) – {body.reportado_por}"
+    # printer_ip y reportado_por ya pasaron el validador que rechaza \r y \n
+    # (ver SolicitudBody._sin_saltos_de_linea); `sede` viene de la cache interna,
+    # no del request, pero se limpia igual por si acaso -- una cabecera nunca
+    # debe llevar un salto de linea, sea cual sea su origen (CWE-93).
+    sede_subject = sede.replace("\r", " ").replace("\n", " ")
+    msg["Subject"] = f"Solicitud de Suministros – {sede_subject} ({body.printer_ip}) – {body.reportado_por}"
     msg["From"]    = EMAIL_FROM
     msg["To"]      = ", ".join(to_list)
     msg.attach(MIMEText(html, "html"))
 
+    # El correo se intenta ANTES de guardar en la BD, no despues. Con el orden
+    # anterior (insert -> commit -> recien intentar el SMTP), un fallo de
+    # envio dejaba una fila en solicitudes_suministros identica a una que si
+    # se mando -- la tabla no tiene columna de estado, asi que no habia forma
+    # de distinguirlas -- y el usuario, al ver el error, reintentaba creyendo
+    # que no se habia guardado nada. Ver correcciones/funcional.md, hallazgo #2.
+    #
+    # Efecto secundario aceptado: si el correo sale pero el INSERT de abajo
+    # fallara (mismo Postgres que ya se uso para leer la cache, mucho menos
+    # probable), el usuario veria "enviado" sin que quede registrado en el
+    # historial de Solicitudes -- mucho menos grave que el problema original
+    # (un pedido de tóner que nunca llego, con la fila diciendo lo contrario).
     try:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
             server.ehlo(); server.starttls()
             server.login(EMAIL_FROM, EMAIL_PASS)
             server.sendmail(EMAIL_FROM, to_list, msg.as_string())
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al enviar correo: {e}")
+        raise _fallo_interno(e, "POST /solicitudes/enviar (smtp)",
+                             "No se pudo enviar el correo. Contacte al administrador.")
+
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO solicitudes_suministros
+                    (printer_ip, sede, area, modelo, suministros, to_email, notas, reportado_por)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            """, (body.printer_ip, sede, area, modelo, body.suministros,
+                  body.to_email, body.notas, body.reportado_por))
+            sol_id = cur.fetchone()[0]
+    except Exception as e:
+        raise _fallo_interno(e, "POST /solicitudes/enviar (insert)")
 
     _audit.info(
         f"SOLICITUD_ENVIADA ip={_client_ip(request)!r} id={sol_id} "
@@ -995,6 +1111,7 @@ async def get_usuario_jobs(userid: str):
                        COALESCE(releasemodel, '')  AS releasemodel
                 FROM pr_stats WHERE userid = %s AND numpages > 0
                 ORDER BY submitdate DESC
+                LIMIT 300
             """, (userid,))
             jobs = [dict(r) for r in cur.fetchall()]
 
@@ -1019,7 +1136,7 @@ async def get_usuario_jobs(userid: str):
 
         return {"userid": userid, "jobs": jobs, "por_dia": por_dia, "por_tipo": por_tipo}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "GET /pr_stats/usuario")
 
 # ── ANALITICA: DESCRIPTIVA Y PREDICTIVA ───────────────────────────────────────
 #
@@ -1292,17 +1409,27 @@ def _consultar_analitica(conn) -> dict:
 
     # ── 3. Volumen por impresora en la ventana movil. Esta si es selectiva
     #      (~20% de la tabla) y usa el indice de submitdate.
+    #
+    # pag_dia se divide por dias_activos (con un piso de 7), NO por
+    # VENTANA_CONSUMO_D fijo. Antes se dividia siempre entre 28 dias
+    # naturales, calculado y guardado dias_activos pero sin usarlo nunca -- una
+    # impresora recien puesta en produccion (3 dias activos de 28, imprimiendo
+    # 500 pag/dia de verdad) quedaba con pag_dia = 1500/28 ~= 54, subestimando
+    # el consumo real en ~9x y mostrando "no urgente" un caso que podia ser
+    # critico. El piso de 7 evita el efecto contrario: que un solo dia
+    # atipicamente activo (ej. 6000 paginas en 1 dia) dispare una tasa
+    # diaria exagerada. Ver correcciones/funcional.md, hallazgo #3.
     cur.execute("""
         SELECT serialnumber                                AS serie,
-               COALESCE(SUM(numpages), 0)::float / %s      AS pag_dia,
+               COALESCE(SUM(numpages), 0)::float          AS pag_total,
                COUNT(DISTINCT submitdate::date)            AS dias_activos
         FROM pr_stats
         WHERE submitdate >= CURRENT_DATE - %s::int
           AND numpages > 0 AND finalaction = 'P'
           AND COALESCE(serialnumber, '') <> ''
         GROUP BY 1
-    """, (VENTANA_CONSUMO_D, VENTANA_CONSUMO_D))
-    consumo = {r["serie"]: {"pag_dia": float(r["pag_dia"]),
+    """, (VENTANA_CONSUMO_D,))
+    consumo = {r["serie"]: {"pag_dia": float(r["pag_total"]) / max(int(r["dias_activos"]), 7),
                             "dias_activos": int(r["dias_activos"])}
                for r in cur.fetchall()}
 
@@ -1479,7 +1606,13 @@ def _derivar_predictiva(series: dict, consumo: dict, equipos: list[dict]) -> dic
             if nivel is None:
                 continue
             nivel = float(nivel)
-            if nivel > 60:          # por encima de 60% no hay nada que decidir
+            # nivel < 0 no deberia ser alcanzable (parse_num en api_server.py ya
+            # convierte cualquier lectura SNMP invalida a NULL antes de guardar),
+            # pero sin esta guarda un valor asi produciria una fecha de
+            # agotamiento EN EL PASADO (dias negativos). Guarda defensiva por si
+            # en el futuro otra via de escritura no pasa por parse_num. Ver
+            # correcciones/funcional.md, hallazgo #7.
+            if nivel < 0 or nivel > 60:   # por encima de 60% no hay nada que decidir
                 continue
             dias = _dias_restantes(nivel, pag_dia, RENDIMIENTO_PAGINAS.get(col, 6000))
             suministros.append({
@@ -1576,7 +1709,7 @@ async def get_analitica():
     try:
         await run_in_threadpool(_refrescar_analitica)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _fallo_interno(e, "GET /analitica")
     if not _ana_cache:
         raise HTTPException(status_code=503, detail="Analitica no disponible todavia")
     return _ana_cache
@@ -1610,11 +1743,18 @@ async def health():
     }
 
 @app.post("/send-alert")
-async def send_alert():
+async def send_alert(request: Request):
     if not EMAIL_FROM or not EMAIL_PASS:
         raise HTTPException(status_code=503, detail="Credenciales de correo no configuradas.")
     if not _cache:
         raise HTTPException(status_code=503, detail="Sin datos en cache aun.")
+
+    # Sin esto, cualquiera en la LAN podia disparar este correo sin limite
+    # (satura el buzon de soporte y gasta la misma cuota de Gmail que las
+    # alertas legitimas). Ver auditoria de seguridad, hallazgo #5.
+    client = _client_ip(request)
+    if not _rate_limit_ok(f"send-alert:{client}", max_calls=1, window_s=300):
+        raise HTTPException(status_code=429, detail="Ya se envió una alerta recientemente.")
 
     printers = _cache["payload"].get("estado", [])
     alertas  = []
@@ -1695,7 +1835,8 @@ async def send_alert():
             server.login(EMAIL_FROM, EMAIL_PASS)
             server.sendmail(EMAIL_FROM, to_list, msg.as_string())
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al enviar correo: {e}")
+        raise _fallo_interno(e, "POST /send-alert (smtp)",
+                             "No se pudo enviar el correo. Contacte al administrador.")
 
     return {"sent": True, "alertas": len(alertas), "destinatario": EMAIL_TO}
 

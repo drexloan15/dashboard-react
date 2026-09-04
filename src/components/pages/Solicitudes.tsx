@@ -201,7 +201,17 @@ export default function Solicitudes({ printers }: Props) {
       setHistPage(1);
     } catch (err: unknown) {
       const d = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
-      setFeedback({ ok: false, msg: typeof d === "string" ? d : "Error al enviar la solicitud." });
+      const mensajesValidacion = new Set([
+        "Selecciona al menos un suministro.",
+        "El correo destinatario es requerido.",
+        "El nombre del reportante es requerido.",
+      ]);
+      const msg = typeof d === "string" && mensajesValidacion.has(d)
+        ? d
+        : d === "Credenciales de correo no configuradas."
+          ? "El servicio de correo no está configurado. Contacta al administrador."
+          : "No se pudo enviar la solicitud. Intenta de nuevo o contacta al administrador.";
+      setFeedback({ ok: false, msg });
     }
   }
 
@@ -219,7 +229,7 @@ export default function Solicitudes({ printers }: Props) {
 
       {/* Feedback */}
       {feedback && (
-        <div className={`px-4 py-3 rounded-lg text-sm font-medium border ${
+        <div role={feedback.ok ? "status" : "alert"} aria-live={feedback.ok ? "polite" : "assertive"} className={`px-4 py-3 rounded-lg text-sm font-medium border ${
           feedback.ok
             ? "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20"
             : "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20"
@@ -401,6 +411,7 @@ export default function Solicitudes({ printers }: Props) {
             <button
               type="submit"
               disabled={!canSubmit}
+              aria-live="polite"
               className={`px-5 py-2.5 rounded-lg text-[13px] font-semibold transition-all
                 ${canSubmit
                   ? "bg-brand-blue text-white hover:opacity-90 cursor-pointer"
@@ -422,7 +433,8 @@ export default function Solicitudes({ printers }: Props) {
         </div>
 
         {histLoad ? (
-          <div className="p-6 space-y-2 animate-pulse">
+          <div role="status" aria-label="Cargando historial de solicitudes" className="p-6 space-y-2 animate-pulse">
+            <span className="sr-only">Cargando historial de solicitudes…</span>
             {[...Array(3)].map((_, i) => (
               <div key={i} className="h-10 dark:bg-dark-surface bg-gray-100 rounded" />
             ))}

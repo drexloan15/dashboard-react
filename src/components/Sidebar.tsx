@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 import { useTheme } from "@/context/ThemeContext";
 import type { Page } from "@/types";
 
@@ -43,8 +44,55 @@ function Toggle({ label, checked, onChange, isCollapsed }: { label: string; chec
   );
 }
 
-export default function Sidebar({ open = false, page, setPage, zonas, setZonas, estados, setEstados, ts, isCollapsed, setIsCollapsed }: Props) {
+export default function Sidebar({ open = false, onClose, page, setPage, zonas, setZonas, estados, setEstados, ts, isCollapsed, setIsCollapsed }: Props) {
   const { toggle } = useTheme();
+  const asideRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 1023px)");
+    const update = () => setIsMobile(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const panel = asideRef.current;
+    if (!panel) return;
+
+    closeButtonRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose?.();
+        return;
+      }
+      if (event.key !== "Tab" || !panel) return;
+
+      const focusable = Array.from(panel.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+      )).filter(element => element.getClientRects().length > 0);
+      if (!focusable.length) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
 
   function toggleZona(z: string) {
     setZonas(zonas.includes(z) ? zonas.filter(x => x !== z) : [...zonas, z]);
@@ -54,11 +102,24 @@ export default function Sidebar({ open = false, page, setPage, zonas, setZonas, 
   }
 
   return (
-    <aside className={`fixed top-0 left-0 h-screen z-50 flex flex-col
+    <aside id="main-sidebar" ref={asideRef} role={open ? "dialog" : undefined} aria-modal={open || undefined}
+      aria-hidden={isMobile && !open ? true : undefined} inert={isMobile && !open ? true : undefined}
+      aria-label="Menú principal" className={`fixed top-0 left-0 h-screen z-50 flex flex-col
       dark:bg-dark-surface dark:border-dark-border bg-white border-light-border
       border-r overflow-y-auto transition-all duration-300 ease-in-out
       ${isCollapsed ? "w-[70px]" : "w-[230px]"}
       ${open ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}>
+
+      <button
+        ref={closeButtonRef}
+        type="button"
+        onClick={onClose}
+        aria-label="Cerrar menú"
+        className="absolute right-3 top-3 rounded-md p-2 text-lg leading-none dark:text-dark-text text-light-text
+          hover:bg-black/5 dark:hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-brand-blue/50 lg:hidden"
+      >
+        ×
+      </button>
 
       {/* Logo */}
       <div className={`px-4 py-5 mb-2 flex flex-col ${isCollapsed ? "items-center" : ""}`}>
@@ -73,7 +134,8 @@ export default function Sidebar({ open = false, page, setPage, zonas, setZonas, 
       {/* Toggle tema */}
       <button
         onClick={toggle}
-        title={isCollapsed ? "Cambiar tema" : ""}
+        aria-label="Cambiar tema"
+        title={isCollapsed ? "Cambiar tema" : undefined}
         className={`mx-3 mb-4 py-2 rounded-lg transition-all hover:opacity-80
           dark:border-dark-border dark:text-dark-text dark:bg-dark-card
           border border-light-border text-light-text bg-white cursor-pointer
@@ -89,7 +151,9 @@ export default function Sidebar({ open = false, page, setPage, zonas, setZonas, 
             <button
               key={id}
               onClick={() => setPage(id)}
-              title={isCollapsed ? label : ""}
+              aria-label={label}
+              aria-current={active ? "page" : undefined}
+              title={isCollapsed ? label : undefined}
               className={`w-full flex items-center mb-0.5 rounded-r-lg text-left transition-all cursor-pointer relative
                 border-l-[3px]
                 ${isCollapsed ? "justify-center px-0 py-3" : "gap-2.5 px-3 py-2.5"}
@@ -140,6 +204,7 @@ export default function Sidebar({ open = false, page, setPage, zonas, setZonas, 
         {/* Botón de Contraer/Expandir (Opción A - Abajo) */}
         <button
           onClick={() => setIsCollapsed(!isCollapsed)}
+          aria-label={isCollapsed ? "Expandir menú" : "Contraer menú"}
           className={`w-full py-2 rounded-lg border dark:border-dark-border border-light-border
             dark:text-dark-text text-light-text hover:bg-black/5 dark:hover:bg-white/5
             transition-all cursor-pointer flex items-center justify-center
