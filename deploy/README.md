@@ -10,8 +10,10 @@ que la configuración de despliegue no corra el mismo riesgo.
 | `docker-compose.yml` | Los 5 servicios del stack `vantio-monitoreo` |
 | `monitoreo.sh` | Gestión: `up down restart rebuild logs ps psql backup url` |
 | `backup-monitoreo-db.sh` | Respaldo diario a Google Drive (cron 3:30 AM) |
+| `heartbeat-servidor.sh` | Heartbeat externo (cron cada 5 min) — ver [Alertas](#alertas) |
 | `env.example` | Plantilla del `.env` (credenciales de PostgreSQL) |
 | `backend.env.example` | Plantilla del `backend.env` |
+| `heartbeat.env.example` | Plantilla del `heartbeat.env` |
 
 ## Lo que NO está aquí, a propósito
 
@@ -20,6 +22,7 @@ Los tres archivos de secretos, que viven solo en el servidor con `chmod 600`:
 - `.env` — credenciales de PostgreSQL
 - `backend.env` — `DATABASE_URL`, `ADMIN_PIN`, credenciales de correo
 - `agent.env` — `AGENT_API_KEY` y credenciales de la BD para `api_server`
+- `heartbeat.env` — URL de ping de healthchecks.io
 
 Sus plantillas sí están (`*.example`), así que se puede reconstruir todo
 sabiendo las contraseñas.
@@ -90,6 +93,41 @@ recordatorio-rclone.py   # se envía una vez y se borra solo del crontab
 
 Se puede probar sin agendar nada ni tocar el cron:
 `python3 recordatorio-rclone.py --prueba`
+
+## Alertas
+
+Dos watchdogs independientes, cada uno cubre lo que el otro no puede ver:
+
+### Agente / túnel caído (backend, sin configuración extra)
+
+`backend/main.py` corre un hilo (`_agente_watchdog_loop`) que cada 30 min mira
+`MAX(updated_at)` de `estado_actual`. Si pasan **12 horas** (`AGENTE_ALERTA_HORAS`
+en `backend.env`, opcional) sin dato nuevo, manda un correo a `EMAIL_TO`. No
+distingue si el agente murió, el túnel cloudflared se cayó, o el servidor de
+Red A está apagado — cualquiera de los tres deja de llegar dato, y el efecto
+visible es el mismo. El flag que evita reenviar el correo vive en memoria: un
+reinicio del backend en medio de una caída larga puede repetir el aviso una
+vez. Se ve también en `GET /health` → `agente_ultima_vista_h`.
+
+### Servidor / Docker caído (`heartbeat-servidor.sh`, cron cada 5 min en el host)
+
+Si se cae el **host** 192.168.1.51 completo, nada que corra en él puede
+avisar de su propia caída — ni el backend, ni un cron, ni un contenedor. La
+solución es al revés: el host "hace sonar" un servicio externo
+(healthchecks.io, gratis) cada 5 minutos, y ese servicio, que corre afuera,
+es el que nota el silencio y manda la alerta. Además el script primero prueba
+`localhost:8001/health`: si el host está arriba pero el stack Docker se cayó,
+avisa como fallo explícito en vez de esperar los 15 min de gracia.
+
+Alta (una vez):
+1. Cuenta gratis en https://healthchecks.io, check nuevo (periodo 5 min,
+   gracia 15 min), alertas por correo.
+2. `cp heartbeat.env.example ~/vantio-monitoreo/heartbeat.env`, pegar la URL
+   de ping, `chmod 600`.
+3. `crontab -e` en el host y agregar:
+   ```cron
+   */5 * * * * /home/jpuccio/vantio-monitoreo/heartbeat-servidor.sh >> /home/jpuccio/vantio-monitoreo/heartbeat.log 2>&1
+   ```
 
 ## Restaurar la base
 

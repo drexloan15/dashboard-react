@@ -61,6 +61,15 @@ SMTP_HOST       = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT       = int(os.getenv("SMTP_PORT", "587"))
 ALERT_THRESHOLD = 25
 
+# Watchdog: agente sin reportar (agente caido o tunel cloudflared caido -- desde
+# aca no se distingue cual de los dos, pero el efecto es el mismo: deja de
+# llegar dato nuevo a estado_actual).
+# Va solo al administrador del sistema, no a EMAIL_TO (helpdesk): es una alerta
+# de infraestructura, no de suministros.
+AGENTE_ALERTA_HORAS      = float(os.getenv("AGENTE_ALERTA_HORAS", "12"))
+AGENTE_CHECK_INTERVALO_S = int(os.getenv("AGENTE_CHECK_INTERVALO_S", "1800"))  # 30 min
+ALERTA_SISTEMA_EMAIL     = os.getenv("ALERTA_SISTEMA_EMAIL", "jean.puccio@comutelperu.com")
+
 SUMINISTROS_LABELS = {
     "TONER_NEGRO": "Toner Negro",       "TONER_CIAN": "Toner Cian",
     "TONER_MAGENTA": "Toner Magenta",   "TONER_AMARILLO": "Toner Amarillo",
@@ -546,6 +555,83 @@ def _bg_loop():
         time.sleep(CACHE_TTL)
         _do_refresh()
 
+# ── WATCHDOG: agente/tunel caido ─────────────────────────────────────────────
+# _agente_alertado evita reenviar el correo en cada chequeo mientras el agente
+# siga caido; se resetea solo cuando vuelve a reportar. Como es una variable en
+# memoria, un reinicio del backend la reinicia tambien -- igual que el
+# rate-limit de PIN -- asi que un reinicio en medio de una caida larga puede
+# repetir el correo una vez. Se acepta: es preferible a quedarse sin alertar.
+_agente_alertado      = False
+_agente_ultima_vista: datetime | None = None
+
+def _enviar_alerta_agente(horas: float) -> None:
+    if not EMAIL_FROM or not EMAIL_PASS:
+        print("[watchdog-agente] sin EMAIL_FROM/EMAIL_PASS, no se puede alertar")
+        return
+    now_str = datetime.now().strftime("%d/%m/%Y %H:%M")
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:auto">
+      <div style="background:#7a1f1f;padding:24px 32px;border-radius:8px 8px 0 0">
+        <h2 style="color:#fff;margin:0;font-size:20px">Alerta - Agente Lexmark sin reportar</h2>
+        <p style="color:#e8b8b8;margin:6px 0 0;font-size:13px">{now_str} &middot; Comutel Per&uacute;</p>
+      </div>
+      <div style="background:#f9fafb;padding:24px 32px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb">
+        <p style="font-size:14px;color:#111;margin:0 0 12px">
+          No llega dato nuevo de <b>estado_actual</b> hace
+          <b>{horas:.1f} horas</b> (umbral: {AGENTE_ALERTA_HORAS:.0f} h).
+        </p>
+        <p style="font-size:13px;color:#374151;margin:0">Posibles causas:</p>
+        <ul style="font-size:13px;color:#374151;margin:6px 0 0;padding-left:20px">
+          <li><code>agente_lexmark.exe</code> dejo de correr en el servidor de Red A</li>
+          <li>El tunel cloudflared (Red B) esta caido o rotado sin actualizar <code>C:\\imp\\url.txt</code></li>
+          <li>El servidor Lexmark Solutions (Red A) esta apagado o sin red</li>
+        </ul>
+        <p style="color:#9ca3af;font-size:11px;margin-top:20px">
+          Generado automaticamente por Dashboard Lexmark &mdash; Comutel Per&uacute;.
+        </p>
+      </div>
+    </div>"""
+    to_list = [a.strip() for a in ALERTA_SISTEMA_EMAIL.replace(";", ",").split(",") if a.strip()]
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"Alerta: agente Lexmark sin reportar hace {horas:.0f}h"
+    msg["From"]    = EMAIL_FROM
+    msg["To"]      = ", ".join(to_list)
+    msg.attach(MIMEText(html, "html"))
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.ehlo(); server.starttls()
+            server.login(EMAIL_FROM, EMAIL_PASS)
+            server.sendmail(EMAIL_FROM, to_list, msg.as_string())
+        print(f"[watchdog-agente] alerta enviada ({horas:.1f} h sin datos)")
+    except Exception as e:
+        print(f"[watchdog-agente] fallo el envio de correo: {e}")
+
+def _chequear_agente_caido() -> None:
+    global _agente_alertado, _agente_ultima_vista
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT MAX(updated_at) FROM estado_actual")
+            ultima = cur.fetchone()[0]
+    except Exception as e:
+        print(f"[watchdog-agente] error consultando BD: {e}")
+        return
+    if ultima is None:
+        return
+    _agente_ultima_vista = ultima
+    horas = (datetime.now(ultima.tzinfo) - ultima).total_seconds() / 3600
+    if horas >= AGENTE_ALERTA_HORAS:
+        if not _agente_alertado:
+            _agente_alertado = True
+            _enviar_alerta_agente(horas)
+    else:
+        _agente_alertado = False
+
+def _agente_watchdog_loop() -> None:
+    while True:
+        _chequear_agente_caido()
+        time.sleep(AGENTE_CHECK_INTERVALO_S)
+
 # Arranque — orden importante:
 # 1. init_db  : crea tablas si no existen (necesario antes de cualquier query)
 # 2. cache    : carga estado_actual en memoria (rápido, ~filas de impresoras)
@@ -571,6 +657,7 @@ _load_cache_from_db()
 threading.Thread(target=_load_pr_cache,  daemon=True).start()
 threading.Thread(target=_bg_loop,        daemon=True).start()
 threading.Thread(target=lambda: [time.sleep(300) or _load_pr_cache() for _ in iter(int, 1)], daemon=True).start()
+threading.Thread(target=_agente_watchdog_loop, daemon=True).start()
 
 # ── MODELOS PYDANTIC ──────────────────────────────────────────────────────────
 class AlertaStatusBody(BaseModel):
@@ -1735,11 +1822,16 @@ threading.Thread(target=_ana_loop, daemon=True).start()
 async def health():
     age  = round((datetime.now() - _cache["ts_dt"]).total_seconds()) if _cache else -1
     pool = _get_pool()
+    agente_horas = (
+        round((datetime.now(_agente_ultima_vista.tzinfo) - _agente_ultima_vista).total_seconds() / 3600, 1)
+        if _agente_ultima_vista else None
+    )
     return {
-        "status":      "ok",
-        "cache_age_s": age,
-        "db":          "connected" if pool else "sin DATABASE_URL",
-        "ts":          datetime.now().isoformat(),
+        "status":            "ok",
+        "cache_age_s":       age,
+        "db":                "connected" if pool else "sin DATABASE_URL",
+        "agente_ultima_vista_h": agente_horas,
+        "ts":                datetime.now().isoformat(),
     }
 
 @app.post("/send-alert")
