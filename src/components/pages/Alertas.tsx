@@ -161,6 +161,7 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
   const [sendMsg,   setSendMsg]       = useState("");
   const [filtroSede, setFiltroSede]   = useState("Todas");
   const [filtroSum,  setFiltroSum]    = useState("Todos");
+  const [filtroModelo, setFiltroModelo] = useState("Todos");
   const [showPin, setShowPin]         = useState(false);
   const [pendingAction, setPendingAction] = useState<(() => void) | null>(null);
 
@@ -260,14 +261,16 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
     return result.sort((a, b) => a.valor - b.valor);
   }, [printers]);
 
-  const sedes  = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.sede))).sort(), [todasAlertas]);
-  const sumins = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.suministro))).sort(), [todasAlertas]);
+  const sedes   = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.sede))).sort(), [todasAlertas]);
+  const sumins  = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.suministro))).sort(), [todasAlertas]);
+  const modelos = useMemo(() => Array.from(new Set(todasAlertas.map(a => a.modelo).filter(Boolean))).sort(), [todasAlertas]);
 
   const alertas = useMemo(() =>
     todasAlertas.filter(a =>
-      (filtroSede === "Todas" || a.sede === filtroSede) &&
-      (filtroSum  === "Todos" || a.suministro === filtroSum)
-    ), [todasAlertas, filtroSede, filtroSum]);
+      (filtroSede   === "Todas" || a.sede   === filtroSede) &&
+      (filtroSum    === "Todos" || a.suministro === filtroSum) &&
+      (filtroModelo === "Todos" || a.modelo === filtroModelo)
+    ), [todasAlertas, filtroSede, filtroSum, filtroModelo]);
 
   const cn = alertas.filter(a => a.nivel === "CRÍTICO").length;
   const bn = alertas.filter(a => a.nivel === "BAJO").length;
@@ -349,6 +352,11 @@ export default function Alertas({ printers }: { printers: Printer[] }) {
             className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
             <option value="Todos">Todos los suministros</option>
             {sumins.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select aria-label="Filtrar alertas por modelo" value={filtroModelo} onChange={e => setFiltroModelo(e.target.value)}
+            className="text-[11px] dark:bg-dark-card bg-white border dark:border-dark-border border-light-border rounded-lg px-2.5 py-1.5 dark:text-dark-text text-light-text outline-none cursor-pointer focus:ring-2 focus:ring-brand-blue/40 focus:border-brand-blue">
+            <option value="Todos">Todos los modelos</option>
+            {modelos.map(m => <option key={m} value={m}>{m}</option>)}
           </select>
           <button onClick={sendAlert} disabled={sendState === "loading"}
             aria-live="polite"
