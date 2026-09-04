@@ -48,3 +48,6 @@ agent/dist/
 # Reportes internos de los agentes de revisión (funcional/seguridad/ux/rendimiento):
 # detallan vulnerabilidades y debilidades del proyecto, no deben salir del equipo.
 correcciones/
+
+# Instrucciones/memoria locales de Claude Code para este proyecto, no se versionan
+.claude/
